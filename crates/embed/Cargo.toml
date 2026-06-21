@@ -1,0 +1,40 @@
+# Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+
+[package]
+name = "memory-embed"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# Default ships only the dependency-free providers (None + Hashed) so the
+# workspace builds without an ONNX runtime. `fastembed` pulls a large
+# `ort`/image transitive tree, so it is opt-in — enabled by the engine + server
+# builds that actually run the local model (bge-large by decision).
+default = []
+fastembed = ["dep:fastembed"]
+# Remote provider: call a dedicated embedding service over HTTP. Light (reqwest
+# only); enabled by the engine build so it can point at the bge-large box.
+remote = ["dep:reqwest"]
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+# Local in-process embedding model (ONNX). Heavy (pulls `ort`), so feature-gated
+# rather than a default dependency.
+fastembed = { version = "4", optional = true }
+
+# Remote embedding client (feature `remote`).
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

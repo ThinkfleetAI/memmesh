@@ -1,0 +1,29 @@
+[package]
+name = "memory-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+memory-core.workspace = true
+memory-storage.workspace = true
+memory-mcp.workspace = true
+memory-license.workspace = true
+memory-audit.workspace = true
+memory-sync.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+axum.workspace = true
+tower-http.workspace = true

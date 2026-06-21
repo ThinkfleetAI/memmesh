@@ -1,0 +1,27 @@
+# Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+
+[package]
+name = "memory-embed-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "memory-embed-server"
+path = "src/main.rs"
+
+# Dedicated embedding service: hosts the heavy local model (bge-large) over
+# HTTP so the engine pod can stay light and call it via the `remote` provider.
+# Always builds the model in (it IS the model host), so `fastembed` is on here.
+
+[dependencies]
+memory-embed = { path = "../embed", features = ["fastembed"] }
+anyhow.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

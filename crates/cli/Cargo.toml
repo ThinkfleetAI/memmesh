@@ -1,0 +1,31 @@
+[package]
+name = "memory-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "memmesh"
+path = "src/main.rs"
+
+[dependencies]
+memory-core.workspace = true
+memory-storage.workspace = true
+memory-server.workspace = true
+memory-license.workspace = true
+memory-sync.workspace = true
+memory-eval.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+toml.workspace = true
+toml_edit.workspace = true

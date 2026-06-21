@@ -1,0 +1,6 @@
+[toolchain]
+# Pin to a specific stable version so CI and developer builds match.
+# Bump explicitly when needed (rather than letting "stable" drift).
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

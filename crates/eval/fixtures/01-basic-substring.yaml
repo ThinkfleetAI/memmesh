@@ -1,0 +1,77 @@
+name: 01-basic-substring
+description: Plain substring text-match within a project / user scope
+k: 5
+
+# The corpus represents what a real user's project would accumulate over
+# a week of work — tech-stack rules, decisions, personal preferences,
+# task-shaped statements that should NOT be confused with rules.
+corpus:
+  - id: m-rust
+    type: rule
+    content: "Team uses Rust for the memory engine"
+    scope: project
+    project_id: growth-os
+
+  - id: m-vitest
+    type: preference
+    content: "User prefers Vitest over Jest for testing"
+    scope: user
+    user_id: ryanrader
+
+  - id: m-pnpm
+    type: rule
+    content: "This codebase uses pnpm, never npm"
+    scope: project
+    project_id: growth-os
+
+  - id: m-decision-typeorm
+    type: decision
+    content: "Team decided to use TypeORM EntitySchema pattern across the backend"
+    scope: project
+    project_id: growth-os
+
+  - id: m-react
+    type: rule
+    content: "Frontend stack is React with TanStack Query"
+    scope: project
+    project_id: growth-os
+
+  - id: m-unrelated
+    type: fact
+    content: "The office is in downtown Pittsburgh"
+    scope: project
+    project_id: growth-os
+
+  - id: m-other-project
+    type: rule
+    content: "Team uses Rust for the activepieces backend too"
+    scope: project
+    project_id: activepieces
+
+queries:
+  - q: "Rust"
+    project_id: growth-os
+    expected: [m-rust]
+    description: Project-scoped Rust rule, excluding the activepieces row
+
+  - q: "Vitest"
+    expected: [m-vitest]
+    description: User-scoped preference, no project filter needed
+
+  - q: "pnpm"
+    project_id: growth-os
+    expected: [m-pnpm]
+
+  - q: "TypeORM"
+    project_id: growth-os
+    expected: [m-decision-typeorm]
+
+  - q: "Pittsburgh"
+    project_id: growth-os
+    expected: [m-unrelated]
+    description: Single-word substring on an unrelated fact
+
+  - q: "Rust"
+    project_id: activepieces
+    expected: [m-other-project]
+    description: Same query, different project → different expected hit

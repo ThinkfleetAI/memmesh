@@ -1,0 +1,23 @@
+[package]
+name = "memory-license"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+ed25519-dalek.workspace = true
+base64.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true

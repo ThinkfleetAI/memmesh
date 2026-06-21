@@ -1,0 +1,23 @@
+[package]
+name = "memory-eval"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+memory-core.workspace = true
+memory-storage.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+chrono.workspace = true
+tracing.workspace = true
