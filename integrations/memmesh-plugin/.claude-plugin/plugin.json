@@ -1,0 +1,22 @@
+{
+  "name": "memmesh",
+  "version": "0.1.0",
+  "description": "Persistent memory + calibrated prediction for AI agents. Remembers decisions, preferences, and patterns across sessions; predicts what a subject will do next — with provenance and honest abstention.",
+  "author": {
+    "name": "ThinkFleet",
+    "email": "support@memmesh.ai"
+  },
+  "homepage": "https://memmesh.ai",
+  "repository": "https://github.com/ThinkfleetAI/memmesh",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "prediction", "personalization", "mcp", "knowledge-graph", "calibration", "semantic-search"],
+  "userConfig": {
+    "api_key": {
+      "type": "string",
+      "title": "MemMesh API Key (hosted mode only)",
+      "description": "Optional. Your MemMesh hosted API key (starts with mm-) for the Mesh Router / app.memmesh.ai. Leave blank to run fully local over SQLite — no key required.",
+      "sensitive": true,
+      "required": false
+    }
+  }
+}
