@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "memmesh": {
+      "command": "memmesh",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}

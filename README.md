@@ -73,12 +73,24 @@ memmesh mcp
 
 ### Tools exposed over MCP
 
+Underscore names are canonical; dot names are accepted as legacy aliases.
+
 | Tool | What it does |
 |---|---|
-| `memory.save` | Upsert a memory item with scope, type, content, importance |
-| `memory.recall` | Fetch by id (reinforces the item on access) |
-| `memory.search` | Filter by scope/project/agent/user/session + content match |
-| `memory.list` | Most-recent items in a scope |
+| `memory_observe` | Feed raw text; the engine decides what to save (primary write path) |
+| `memory_save` | Upsert a memory item with scope, type, content, importance (rare) |
+| `memory_recall` | Fetch by id (reinforces the item on access) |
+| `memory_search` | Filter by scope/project/agent/user/session + content match |
+| `memory_list` | Most-recent items in a scope |
+| `memory_delete` | Forget an item — soft-reject (default, sync-safe) or hard delete |
+| `memory_supersede` | Record a correction (old item kept for provenance) |
+| `memory_stats` | Counts by type/scope/status + age span |
+| `memory_extract_pending` / `memory_commit_extraction` | Client-LLM knowledge-graph extraction |
+| `memory_graph_reason` | Multi-hop reasoning over the knowledge graph |
+| `memory_query_graph` | Point-in-time (bi-temporal) edge query |
+| `memory_prefetch_related` | Anticipatory retrieval via spreading activation |
+| `memory_build_context` | Full subject context bundle (profile + patterns + predictions) |
+| `memory_predict` | Forecast a subject's next events, calibrated + with provenance |
 
 ## Architecture
 

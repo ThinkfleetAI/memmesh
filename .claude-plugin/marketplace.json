@@ -1,0 +1,18 @@
+{
+  "name": "memmesh-plugins",
+  "owner": {
+    "name": "ThinkFleet",
+    "email": "support@memmesh.ai"
+  },
+  "metadata": {
+    "description": "Official MemMesh plugins for Claude Code and other agents"
+  },
+  "plugins": [
+    {
+      "name": "memmesh",
+      "source": "./integrations/memmesh-plugin",
+      "description": "MemMesh — a memory + calibrated-prediction + behavior-discovery engine for AI apps. Persistent hierarchical memory, a bi-temporal knowledge graph, and forward predictions with provenance and abstention. The engine decides what to save; your agent's own model does any extraction (zero engine-side LLM cost).",
+      "version": "0.1.0"
+    }
+  ]
+}
