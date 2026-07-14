@@ -40,6 +40,26 @@ Every downstream crate talks to `memory_storage::Storage`. No crate outside
 - Local + SaaS swap a runtime concern.
 - Sync engine clean — sync is `Storage` ↔ `Storage`.
 
+## Temporal knowledge graph
+
+Entities and edges are **bi-temporal**: every edge carries `valid_from` /
+`valid_to`, so the graph answers *"what did we believe on date X"*, not just
+*"what is true now"*. `EdgeFilter::as_of` runs a point-in-time query
+(`validFrom <= as_of AND (validTo IS NULL OR validTo > as_of)`); omitting it
+with `current_only` returns only open edges.
+
+`storage::temporal` maintains that timeline. When a subject's single-valued
+fact changes (`lives_in Boston` → `lives_in Denver`),
+`supersede_conflicting_edges` *closes* the old edge at the new one's
+`valid_from` (via `Storage::invalidate_edge`) instead of deleting it — so the
+timeline stays contiguous and non-overlapping: exactly one current edge per
+(subject, predicate), every past belief still queryable at its own `as_of`.
+Only **functional** predicates supersede (`works_at`, `lives_in`, …); multi-
+valued ones (`likes`, `attended`) legitimately keep many objects and are never
+collapsed. Auto-supersession on write is gated behind
+`MEMORY_TEMPORAL_SUPERSEDE_ENABLED=true` (default off; the primitives are always
+available to call explicitly).
+
 ## Mode selection (runtime, never compile-time)
 
 ```sh

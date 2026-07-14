@@ -1010,7 +1010,20 @@ impl Storage for PostgresStore {
             sql.push_str(&format!(" AND predicate = ${n}"));
             binds.push(s.clone());
         }
-        if q.current_only {
+        // Point-in-time takes precedence over current_only. Cast the text
+        // binds to timestamptz so the comparison is temporal, not lexical.
+        if let Some(at) = q.as_of {
+            let at_s = at.to_rfc3339();
+            n += 1;
+            let a = n;
+            binds.push(at_s.clone());
+            n += 1;
+            let b = n;
+            binds.push(at_s);
+            sql.push_str(&format!(
+                " AND \"validFrom\" <= ${a}::timestamptz AND (\"validTo\" IS NULL OR \"validTo\" > ${b}::timestamptz)"
+            ));
+        } else if q.current_only {
             sql.push_str(" AND \"validTo\" IS NULL");
         }
         sql.push_str(" ORDER BY updated DESC");
@@ -1026,6 +1039,17 @@ impl Storage for PostgresStore {
         }
         let rows = qb.fetch_all(&self.pool).await?;
         rows.into_iter().map(row_to_edge).collect()
+    }
+
+    async fn invalidate_edge(&self, id: &str, at: DateTime<Utc>) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"UPDATE memory_edge SET "validTo" = $1, updated = now() WHERE id = $2 AND "validTo" IS NULL"#,
+        )
+        .bind(at)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn save_binding(&self, binding: &ProjectBinding) -> Result<(), StorageError> {

@@ -207,7 +207,8 @@ fn tool_definitions() -> serde_json::Value {
                     "projectId":  { "type": ["string", "null"], "description": "Current project (git repo name is a good default)." },
                     "userId":     { "type": ["string", "null"], "description": "Defaults to the OS username." },
                     "agentId":    { "type": ["string", "null"] },
-                    "sessionId":  { "type": ["string", "null"] }
+                    "sessionId":  { "type": ["string", "null"] },
+                    "occurredAt": { "type": ["string", "null"], "description": "RFC3339 timestamp of when this happened IN THE WORLD, not when you're recording it. Defaults to now. Set it when observing anything back-dated — behavior mining buckets patterns by this timestamp." }
                 }
             }
         },
@@ -229,6 +230,7 @@ fn tool_definitions() -> serde_json::Value {
                     "scope":        { "type": "string", "enum": ["platform","project","location","agent","user","session"] },
                     "importance":   { "type": "number", "description": "0-10, default 5." },
                     "confidence":   { "type": "number", "description": "0-1, default 1.0." },
+                    "occurredAt":   { "type": ["string", "null"], "description": "RFC3339 timestamp of when this happened IN THE WORLD, as opposed to when you're recording it. Defaults to now. Set this whenever you're recording something back-dated (importing history, logging a past event) — behavior mining buckets patterns by this timestamp, so leaving it unset makes every backfilled event look like it happened at import time." },
                     "metadata":     { "type": ["object", "null"] }
                 }
             }
@@ -270,7 +272,8 @@ fn tool_definitions() -> serde_json::Value {
                     "platformId": { "type": ["string", "null"] },
                     "projectId":  { "type": ["string", "null"] },
                     "scope":      { "type": ["string", "null"] },
-                    "limit":      { "type": "integer", "default": 20 }
+                    "limit":      { "type": "integer", "default": 20 },
+                    "offset":     { "type": "integer", "default": 0, "description": "Skip this many rows — page by bumping it. The handler has always honored this; it was just missing from the schema, so agents had no way to know they could page." }
                 }
             }
         },
@@ -729,6 +732,21 @@ fn memory_item_from_args(args: &serde_json::Value) -> anyhow::Result<MemoryItem>
         if !v.is_null() {
             item.metadata = v.clone();
         }
+    }
+    // Event time. `MemoryItem::new` stamps `valid_from = now` (ingest time),
+    // which is right for "I just learned this" and wrong for anything
+    // back-dated. `valid_from` is the timestamp behavior mining buckets on, so
+    // without this a backfill produces patterns describing the import run
+    // rather than the events. `validFrom` is accepted as an alias for callers
+    // that speak the storage field name.
+    if let Some(ts) = args
+        .get("occurredAt")
+        .or_else(|| args.get("validFrom"))
+        .and_then(|v| v.as_str())
+    {
+        item.valid_from = ts
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .map_err(|e| anyhow::anyhow!("occurredAt must be an RFC3339 timestamp: {e}"))?;
     }
     Ok(item)
 }

@@ -14,7 +14,7 @@
 mod installer;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use installer::{Action, SkillBundle, Tool};
 use memory_core::{MemoryItem, MemoryScope};
@@ -121,6 +121,11 @@ enum Cmd {
         agent: Option<String>,
         #[arg(long)]
         session: Option<String>,
+        /// RFC3339 timestamp of when this happened in the world (event time),
+        /// as opposed to now (ingest time). Behavior mining buckets patterns by
+        /// this, so set it when observing back-dated text.
+        #[arg(long, value_name = "RFC3339")]
+        occurred_at: Option<DateTime<Utc>>,
         /// Print structured JSON of what was saved (machine-readable mode
         /// for hooks). Without it, prints a human-readable summary.
         #[arg(long)]
@@ -493,6 +498,7 @@ async fn main() -> Result<()> {
             user,
             agent,
             session,
+            occurred_at,
             json,
         } => {
             let text = match content {
@@ -518,6 +524,7 @@ async fn main() -> Result<()> {
                 user_id: Some(user.unwrap_or_else(detect_os_user)),
                 agent_id: agent,
                 session_id: session,
+                occurred_at,
             };
             memory_storage::quota::ensure_under_cap(store.as_ref(), license.cap())
                 .await
