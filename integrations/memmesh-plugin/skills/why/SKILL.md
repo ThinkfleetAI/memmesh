@@ -10,6 +10,9 @@ description: >
 
 # why
 
+> **⚙️ Requires MemMesh hosted mode.** Calibrated prediction and behavior discovery run on the hosted engine — set your `mm-` API key. On a local / open-source install these tools (`memory_predict`, `memory_build_context`) are not registered; if a call returns "unknown tool", tell the user this is a hosted capability and fall back to `search` / `recall` for what's already known.
+
+
 Make MemMesh's outputs auditable. Every prediction and consolidated fact carries
 provenance and a calibrated confidence — this skill exposes them so a human can
 check the reasoning.

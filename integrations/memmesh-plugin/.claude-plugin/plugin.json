@@ -1,7 +1,7 @@
 {
   "name": "memmesh",
   "version": "0.1.0",
-  "description": "Persistent memory + calibrated prediction for AI agents. Remembers decisions, preferences, and patterns across sessions; predicts what a subject will do next — with provenance and honest abstention.",
+  "description": "Persistent, local-first memory for AI agents. Remembers facts, preferences, and decisions across sessions with a bi-temporal knowledge graph, over MCP — runs fully local on SQLite with no mandatory LLM calls. Calibrated prediction & behavior discovery available in hosted mode.",
   "author": {
     "name": "ThinkFleet",
     "email": "support@memmesh.ai"

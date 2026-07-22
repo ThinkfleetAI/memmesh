@@ -10,6 +10,9 @@ description: >
 
 # predict
 
+> **⚙️ Requires MemMesh hosted mode.** Calibrated prediction and behavior discovery run on the hosted engine — set your `mm-` API key. On a local / open-source install these tools (`memory_predict`, `memory_build_context`) are not registered; if a call returns "unknown tool", tell the user this is a hosted capability and fall back to `search` / `recall` for what's already known.
+
+
 Turn accumulated memory into a forward forecast. Unlike `search` ("what do we
 know"), `predict` answers "what happens next" — and it tells you how confident it
 honestly is, or abstains.

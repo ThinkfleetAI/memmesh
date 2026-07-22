@@ -9,6 +9,9 @@ description: >
 
 # graph
 
+> **⚙️ Graph reasoning requires MemMesh hosted mode.** Building the graph works locally: `memory_extract_pending` → `memory_commit_extraction` populate typed entities/edges. Multi-hop **reasoning/traversal** (`memory_graph_reason`, `memory_query_graph`, `memory_prefetch_related`) runs on the hosted engine — set your `mm-` API key. If those return "unknown tool" on a local install, say so and use `search` over the extracted entities instead.
+
+
 MemMesh links memories into a knowledge graph whose edges are **bi-temporal**
 (each has `valid_from` / `valid_to`). That enables answers a flat store can't
 give.
