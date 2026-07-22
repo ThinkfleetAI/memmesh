@@ -324,6 +324,38 @@ fn tool_definitions() -> serde_json::Value {
                     }
                 }
             }
+        },
+        {
+            "name": "memory_delete",
+            "description": "Delete a memory by id. Soft-delete by default (marks it deleted, recoverable); pass hard=true to remove the row permanently. Use to correct a mistake or honor a 'forget this' request.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id":   { "type": "string", "description": "id of the memory to delete." },
+                    "hard": { "type": "boolean", "default": false, "description": "true = permanent hard delete; false = recoverable soft delete." }
+                }
+            }
+        },
+        {
+            "name": "memory_supersede",
+            "description": "Mark one memory as superseded by another — the old memory is kept for audit/history but is no longer the current truth. Use when a fact changes ('actually we moved to Postgres'): save the new memory, then supersede the old one by the new id.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["id", "byId"],
+                "properties": {
+                    "id":   { "type": "string", "description": "id of the memory being superseded (the old / outdated one)." },
+                    "byId": { "type": "string", "description": "id of the memory that replaces it (the new current one)." }
+                }
+            }
+        },
+        {
+            "name": "memory_stats",
+            "description": "Return counts about the memory store — currently the total number of memories held. Useful for a health check or a 'how much do you remember' summary.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
         }
     ])
 }
@@ -420,6 +452,30 @@ async fn handle_tool_call<S: Storage>(
         "memory_extract_pending" => extract_pending(storage, args).await,
 
         "memory_commit_extraction" => commit_extraction(storage, args).await,
+
+        "memory_delete" => {
+            let id = arg_str(args, "id")?;
+            let hard = args.get("hard").and_then(|v| v.as_bool()).unwrap_or(false);
+            storage.delete(id, hard).await?;
+            Ok(text_result(&format!(
+                "{} memory {id}",
+                if hard { "hard-deleted" } else { "deleted" }
+            )))
+        }
+
+        "memory_supersede" => {
+            let id = arg_str(args, "id")?;
+            let by_id = arg_str(args, "byId")?;
+            storage.supersede(id, by_id).await?;
+            Ok(text_result(&format!("superseded {id} by {by_id}")))
+        }
+
+        "memory_stats" => {
+            let total = storage.count_items().await?;
+            Ok(text_result(&serde_json::to_string_pretty(
+                &serde_json::json!({ "totalMemories": total }),
+            )?))
+        }
 
         other => anyhow::bail!("unknown tool: {other}"),
     }
