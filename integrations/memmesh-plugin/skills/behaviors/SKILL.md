@@ -9,6 +9,9 @@ description: >
 
 # behaviors
 
+> **⚙️ Requires MemMesh hosted mode.** Calibrated prediction and behavior discovery run on the hosted engine — set your `mm-` API key. On a local / open-source install these tools (`memory_predict`, `memory_build_context`) are not registered; if a call returns "unknown tool", tell the user this is a hosted capability and fall back to `search` / `recall` for what's already known.
+
+
 Show the patterns MemMesh discovered on its own. These `behavior_pattern`
 memories are what `predict` projects forward — inspecting them explains the
 forecasts.

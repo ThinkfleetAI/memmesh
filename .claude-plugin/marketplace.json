@@ -11,8 +11,8 @@
     {
       "name": "memmesh",
       "source": "./integrations/memmesh-plugin",
-      "description": "MemMesh — a memory + calibrated-prediction + behavior-discovery engine for AI apps. Persistent hierarchical memory, a bi-temporal knowledge graph, and forward predictions with provenance and abstention. The engine decides what to save; your agent's own model does any extraction (zero engine-side LLM cost).",
-      "version": "0.1.0"
+      "description": "MemMesh — persistent, local-first memory for AI agents. Bi-temporal knowledge graph, typed/scoped recall, and local↔server sync, over MCP; runs from one binary on SQLite with no mandatory LLM calls (your agent's own model does any extraction). Calibrated prediction & behavior discovery available in hosted mode.",
+      "version": "0.1.1"
     }
   ]
 }
