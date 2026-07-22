@@ -2065,7 +2065,7 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "memory-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2080,7 +2080,7 @@ dependencies = [
 
 [[package]]
 name = "memory-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2104,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "memory-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2121,7 +2121,7 @@ dependencies = [
 
 [[package]]
 name = "memory-embed"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2135,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "memory-embed-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "memory-eval"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "memory-license"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2183,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "memory-mcp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "memory-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -2224,7 +2224,7 @@ dependencies = [
 
 [[package]]
 name = "memory-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2244,7 +2244,7 @@ dependencies = [
 
 [[package]]
 name = "memory-sync"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",

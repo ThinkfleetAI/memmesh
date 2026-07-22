@@ -12,7 +12,7 @@
       "name": "memmesh",
       "source": "./integrations/memmesh-plugin",
       "description": "MemMesh — persistent, local-first memory for AI agents. Bi-temporal knowledge graph, typed/scoped recall, and local↔server sync, over MCP; runs from one binary on SQLite with no mandatory LLM calls (your agent's own model does any extraction). Calibrated prediction & behavior discovery available in hosted mode.",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ]
 }

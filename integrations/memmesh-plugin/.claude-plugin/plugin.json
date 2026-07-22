@@ -1,6 +1,6 @@
 {
   "name": "memmesh",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Persistent, local-first memory for AI agents. Remembers facts, preferences, and decisions across sessions with a bi-temporal knowledge graph, over MCP — runs fully local on SQLite with no mandatory LLM calls. Calibrated prediction & behavior discovery available in hosted mode.",
   "author": {
     "name": "ThinkFleet",
