@@ -73,7 +73,50 @@ pub fn extract(text: &str, ctx: &ObserveContext) -> Vec<ExtractedMemory> {
             out.push(m);
         }
     }
+
+    // Fallback: nothing matched a structured rule, but the input is
+    // substantive prose. Keep it verbatim as a raw `observation` rather than
+    // silently dropping it — an agent memory that discards what the user tells
+    // it is worse than one that over-captures. The structured rules are
+    // first-person-anchored ("I prefer…", "we decided…"); most real input
+    // (third-person, questions aside, arbitrary facts) matches nothing, so
+    // without this the store stays empty. Hosted LLM extraction refines these
+    // into typed facts; locally we at least never lose them.
+    if out.is_empty() {
+        if let Some(m) = fallback_observation(text) {
+            out.push(m);
+        }
+    }
+
     out
+}
+
+/// Keep substantive input that matched no structured rule as a raw
+/// `observation`. Filters out questions, code/commands, and short fragments so
+/// the store fills with statements rather than chatter or one-word acks.
+fn fallback_observation(text: &str) -> Option<ExtractedMemory> {
+    let trimmed = text.trim();
+    if is_code_or_command(trimmed) {
+        return None;
+    }
+    // Questions ask, they don't assert — skip them.
+    if trimmed.ends_with('?') {
+        return None;
+    }
+    // Require some substance so acks that slipped past the filler filter
+    // ("sounds good to me") don't become memories.
+    let word_count = trimmed.split_whitespace().count();
+    if trimmed.chars().count() < 24 || word_count < 4 {
+        return None;
+    }
+    Some(ExtractedMemory {
+        content: normalize_subject(trimmed),
+        kind: "observation",
+        scope: MemoryScope::Project,
+        importance: 3.0,
+        impact: MemoryImpact::Low,
+        reason: "raw-observation",
+    })
 }
 
 /// Split a message into sentence-ish lines for per-clause extraction. Real
@@ -545,5 +588,37 @@ mod tests {
     fn ignores_questions() {
         let out = extract("What do you think we should do here?", &ctx());
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn third_person_statement_kept_as_raw_observation() {
+        // Matches no first-person rule, but must not be dropped.
+        let out = extract("Ryan prefers pnpm over npm for all projects.", &ctx());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, "observation");
+        assert_eq!(out[0].reason, "raw-observation");
+        assert!(out[0].content.to_lowercase().contains("pnpm"));
+    }
+
+    #[test]
+    fn arbitrary_fact_captured_via_fallback() {
+        let out = extract("Ryan's email is ryan@thinkfleet.ai for work.", &ctx());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, "observation");
+    }
+
+    #[test]
+    fn structured_rule_still_wins_over_fallback() {
+        // A first-person preference should classify as `preference`, not the
+        // generic `observation` fallback.
+        let out = extract("I prefer Vitest over Jest for testing.", &ctx());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].kind, "preference");
+    }
+
+    #[test]
+    fn fallback_skips_questions_and_short_fragments() {
+        assert!(extract("What should we do about the migration here?", &ctx()).is_empty());
+        assert!(extract("Sounds good to me", &ctx()).is_empty());
     }
 }
