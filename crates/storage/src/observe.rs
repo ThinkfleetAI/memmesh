@@ -7,7 +7,7 @@
 //! schema fields the extractor doesn't know about, and persist. Shared by
 //! the MCP tool, the HTTP endpoint, and the CLI subcommand.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use memory_core::{
     extraction::{extract, ObserveContext, ObserveRole},
     MemoryItem, MemoryScope, MemoryStatus,
@@ -34,6 +34,13 @@ pub struct ObserveRequest {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// When this happened *in the world*, as opposed to when it was observed.
+    /// Defaults to now. Drives `valid_from` on every item extracted from this
+    /// text — which is the timestamp behavior mining buckets on, so a backfill
+    /// that leaves this unset produces patterns describing the import run
+    /// rather than the events. Accepts `validFrom` as an alias.
+    #[serde(default, alias = "validFrom")]
+    pub occurred_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,7 +126,10 @@ pub async fn observe<S: Storage>(
             confirmed_by_user_id: None,
             confirmed_at: None,
             negative_rating_count: 0,
-            valid_from: now,
+            // Event time, defaulting to ingest time. `learned_at` stays `now`
+            // regardless — that's the bi-temporal split: when it became true vs.
+            // when we found out.
+            valid_from: req.occurred_at.unwrap_or(now),
             valid_to: None,
             learned_at: now,
             last_accessed_at: now,

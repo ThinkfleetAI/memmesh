@@ -962,7 +962,14 @@ impl Storage for SqliteStore {
             sql.push_str(" AND predicate = ?");
             binds.push(s.clone());
         }
-        if q.current_only {
+        // Point-in-time takes precedence over current_only: an edge was valid
+        // AT `as_of` iff it had started and had not yet been closed.
+        if let Some(at) = q.as_of {
+            let at = iso(at);
+            sql.push_str(" AND validFrom <= ? AND (validTo IS NULL OR validTo > ?)");
+            binds.push(at.clone());
+            binds.push(at);
+        } else if q.current_only {
             sql.push_str(" AND validTo IS NULL");
         }
         sql.push_str(" ORDER BY updated DESC");
@@ -978,6 +985,18 @@ impl Storage for SqliteStore {
         }
         let rows = qb.fetch_all(&self.pool).await?;
         rows.into_iter().map(row_to_edge).collect()
+    }
+
+    async fn invalidate_edge(&self, id: &str, at: DateTime<Utc>) -> Result<(), StorageError> {
+        sqlx::query(
+            "UPDATE memory_edge SET validTo = ?, updated = ? WHERE id = ? AND validTo IS NULL",
+        )
+        .bind(iso(at))
+        .bind(iso(Utc::now()))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn save_binding(&self, binding: &ProjectBinding) -> Result<(), StorageError> {

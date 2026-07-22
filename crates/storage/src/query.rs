@@ -138,7 +138,13 @@ pub struct EdgeFilter {
     pub subject_id: Option<String>,
     pub object_id: Option<String>,
     pub predicate: Option<String>,
+    /// Only edges still open (`validTo IS NULL`). Superseded by `as_of`
+    /// when that is set (a point in time is more specific than "now").
     pub current_only: bool,
+    /// Point-in-time query: return edges that were valid AT this instant —
+    /// `validFrom <= as_of AND (validTo IS NULL OR validTo > as_of)`. This is
+    /// what makes the graph a *temporal* KG: "what did we believe on date X".
+    pub as_of: Option<chrono::DateTime<chrono::Utc>>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }

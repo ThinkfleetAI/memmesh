@@ -20,6 +20,7 @@ pub mod graph_extractor;
 pub mod observe;
 pub mod query;
 pub mod quota;
+pub mod temporal;
 pub mod validate;
 
 #[cfg(feature = "postgres")]
@@ -192,6 +193,16 @@ pub trait Storage: Send + Sync + 'static {
 
     /// List edges matching the filter (subject/object/predicate + scope).
     async fn query_edges(&self, q: &EdgeFilter) -> Result<Vec<MemoryEdge>, StorageError>;
+
+    /// Close an open edge at `at` (set `validTo = at` where it's currently
+    /// NULL). Bi-temporal supersession: the edge is retained for history —
+    /// it just stops being "current", so an `as_of` query before `at` still
+    /// returns it. No-op if the edge is missing or already closed.
+    async fn invalidate_edge(
+        &self,
+        id: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), StorageError>;
 
     // ── project_bindings ────────────────────────────────────
     //

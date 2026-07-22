@@ -54,10 +54,12 @@ MCowBQYDK2VwAyEASeFn7v8VS02tyi2XCaeSjzn8WUXki6ksGI8S8lclcgg=
 /// the customer's, but they can't grow it further.
 pub const GRACE_PERIOD_SECS: i64 = 7 * 24 * 60 * 60; // 7 days
 
-/// Free-tier cap when no license token is loaded. Matches the
-/// settled local-desktop default (2026-05-18) and the existing
-/// `quota::effective_cap` free-tier value.
-pub const FREE_TIER_MEMORY_CAP: u64 = 500;
+/// Free-tier cap when no license token is loaded. `u64::MAX` is the
+/// "unlimited" sentinel (see [`License::cap`], which maps it to `None`):
+/// the open-source engine imposes no write ceiling. Commercial embedders
+/// that want a tiered cap ship a signed license whose `memory_cap` claim
+/// carries a finite value.
+pub const FREE_TIER_MEMORY_CAP: u64 = u64::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -329,8 +331,8 @@ impl License {
     }
 
     /// Cap as an `Option<i64>` matching the existing `quota::ensure_under_cap`
-    /// signature. `None` = unlimited. The free-tier u64 cap converts directly
-    /// to i64 because `FREE_TIER_MEMORY_CAP` is well under `i64::MAX`.
+    /// signature. `None` = unlimited — returned both for the `u64::MAX`
+    /// sentinel (the free-tier default) and any claim above `i64::MAX`.
     pub fn cap(&self) -> Option<i64> {
         match self.claims.memory_cap {
             u64::MAX => None,
@@ -528,7 +530,7 @@ mod tests {
         let now = Utc::now();
         let lic = License::free(now);
         assert_eq!(lic.tier(), LicenseTier::Free);
-        assert_eq!(lic.cap(), Some(FREE_TIER_MEMORY_CAP as i64));
+        assert_eq!(lic.cap(), None); // free tier is uncapped (unlimited)
         assert!(lic.allows_writes());
     }
 
@@ -550,7 +552,7 @@ mod tests {
         let now = Utc::now();
         let lic = License::from_token("not a real jwt", now);
         assert_eq!(lic.tier(), LicenseTier::Free);
-        assert_eq!(lic.cap(), Some(FREE_TIER_MEMORY_CAP as i64));
+        assert_eq!(lic.cap(), None); // free tier is uncapped (unlimited)
     }
 
     #[test]
