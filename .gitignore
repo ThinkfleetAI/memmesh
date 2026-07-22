@@ -34,3 +34,6 @@ logs/
 # Coverage
 /coverage/
 tarpaulin-report.html
+
+# fastembed model cache (downloaded at runtime, not source)
+.fastembed_cache/

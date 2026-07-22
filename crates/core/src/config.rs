@@ -16,9 +16,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Default entry cap for the free tier. Hard cap on `clawdbot_memory_item`
-/// row count; new saves are rejected once reached. Confirmed 2026-05-18.
-pub const DEFAULT_FREE_TIER_CAP: i64 = 500;
+/// Default entry cap for the local engine. `0` (or any non-positive value)
+/// means **unlimited** — the open-source engine imposes no ceiling on
+/// `clawdbot_memory_item` row count. A positive value re-enables a hard cap
+/// and is intended for commercial embedders (e.g. desktop plan tiers) that
+/// set it explicitly via config or `THINKFLEET_FREE_TIER_CAP`.
+pub const DEFAULT_FREE_TIER_CAP: i64 = 0;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -74,7 +77,8 @@ pub enum BindingPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FreeTierConfig {
     /// Max `clawdbot_memory_item` rows the engine will accept in local-only
-    /// mode. Confirmed 2026-05-18 to be 500.
+    /// mode. `0` (the default) = unlimited; a positive value enables a hard
+    /// cap for commercial embedders.
     #[serde(default = "default_free_tier_cap")]
     pub entry_cap: i64,
 }
