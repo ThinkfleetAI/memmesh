@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! `memmesh` — single binary, multiple subcommands.
 //!
@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 use installer::{Action, SkillBundle, Tool};
 use memory_core::{MemoryItem, MemoryScope};
 use memory_license::License;
-use memory_storage::{sqlite::SqliteStore, MemoryFilter, MemoryQuery, Storage};
+use memory_storage::{sqlite::SqliteStore, MemoryFilter, Storage};
 use std::sync::Arc;
 
 /// Default DB path under $XDG_DATA_HOME / ~/.local/share / fallback CWD.
@@ -158,6 +158,38 @@ enum Cmd {
         /// into an AI tool's context via a SessionStart hook.
         #[arg(long, default_value = "json")]
         format: String,
+    },
+
+    /// Find near-duplicate memories within a scope and non-destructively
+    /// collapse the redundant ones into a survivor (via supersede, so history
+    /// and provenance are kept). Two memories are "duplicates" when their
+    /// embeddings' cosine similarity is >= `--threshold`. Safe + idempotent:
+    /// re-running skips anything already collapsed, and `--dry-run` shows what
+    /// would happen without writing. Requires semantic embeddings for cosine
+    /// matching; without them it falls back to exact normalized-text equality.
+    Consolidate {
+        #[arg(long)]
+        platform: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long)]
+        r#type: Option<String>,
+        /// Cosine similarity at/above which two memories are considered
+        /// duplicates. Higher = stricter. Default 0.95.
+        #[arg(long, default_value_t = 0.95)]
+        threshold: f32,
+        /// Report what would be collapsed without writing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Start the MCP stdio server. Wire this into an AI tool's MCP config
@@ -468,6 +500,9 @@ async fn main() -> Result<()> {
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             store.save(&item).await?;
+            // Index it for semantic search (no-op when embeddings are off).
+            memory_storage::embedding::embed_and_store(store.as_ref(), &item.id, &item.content)
+                .await;
             println!("{}", id);
         }
 
@@ -565,22 +600,93 @@ async fn main() -> Result<()> {
                 user_id: user,
                 scope: scope.as_deref().map(parse_scope).transpose()?,
                 kind: r#type,
-                text_match: query,
+                // Free text goes through the hybrid searcher via `query`, not
+                // the filter's substring `text_match`.
+                text_match: None,
                 ..Default::default()
             };
-            let rows = store
-                .query(&MemoryQuery {
-                    filter,
-                    limit: Some(limit),
-                    offset: Some(offset),
-                })
-                .await?;
+            // Hybrid semantic + lexical + recency ranking. Falls back to the
+            // lexical substring path automatically when embeddings are off.
+            let rows = memory_storage::search::search(
+                store.as_ref(),
+                &filter,
+                query.as_deref(),
+                limit,
+                offset,
+            )
+            .await?;
             match format.as_str() {
                 "json" => println!("{}", serde_json::to_string_pretty(&rows)?),
                 "claude-context" => {
                     print!("{}", format_claude_context(&rows, project_for_header.as_deref()));
                 }
                 other => return Err(anyhow!("invalid --format '{other}'. Known: json, claude-context")),
+            }
+        }
+
+        Cmd::Consolidate {
+            platform,
+            project,
+            agent,
+            user,
+            scope,
+            r#type,
+            threshold,
+            dry_run,
+            json,
+        } => {
+            let filter = MemoryFilter {
+                platform_id: platform,
+                project_id: project,
+                agent_id: agent,
+                user_id: user,
+                scope: scope.as_deref().map(parse_scope).transpose()?,
+                kind: r#type,
+                ..Default::default()
+            };
+            let report =
+                memory_storage::consolidate::consolidate(store.as_ref(), &filter, threshold, dry_run)
+                    .await?;
+            if json {
+                let collapses: Vec<_> = report
+                    .collapses
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "loserId": c.loser_id,
+                            "survivorId": c.survivor_id,
+                            "similarity": c.similarity,
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "scanned": report.scanned,
+                        "threshold": report.threshold,
+                        "semantic": report.semantic,
+                        "dryRun": report.dry_run,
+                        "collapsed": report.collapses.len(),
+                        "collapses": collapses,
+                    }))?
+                );
+            } else {
+                let mode = if report.dry_run { " (dry run — nothing written)" } else { "" };
+                let matcher = if report.semantic { "cosine embeddings" } else { "exact text (no embeddings)" };
+                println!(
+                    "consolidate: scanned {} item(s), collapsed {} duplicate(s) at threshold {:.2} via {}{}",
+                    report.scanned,
+                    report.collapses.len(),
+                    report.threshold,
+                    matcher,
+                    mode,
+                );
+                for c in &report.collapses {
+                    println!(
+                        "  {} → {} (cosine {:.3})",
+                        c.loser_id, c.survivor_id, c.similarity
+                    );
+                }
             }
         }
 

@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Memory access audit log — append-only record of every read / write /
 //! subscribe routed through the engine. Mirrors `memory_audit_event` in the

@@ -1,0 +1,6 @@
+# Restore the proprietary thinkfleet-memory MCP server (undo the memmesh overwrite):
+claude mcp remove "memmesh" -s user
+claude mcp add thinkfleet-memory -s user -- /Users/ryanrader/Dev/_code/thinkfleet-memory-engine/target/release/thinkfleet-memory --db /Users/ryanrader/.thinkfleet-memory/memory.db mcp
+
+# Or just restore the whole config backup:
+#   cp ~/.claude.json.bak-<STAMP> ~/.claude.json

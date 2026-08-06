@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Knowledge-graph entities + edges. Mirrors `memory_entity` and
 //! `memory_edge`. Both tables are bi-temporal — `valid_from` / `valid_to`

@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Pattern detection algorithms. The five detectors below are ported from
 //! the activepieces lattice-engine `algorithms.rs` — pure functions with

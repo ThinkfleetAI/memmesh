@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 //
 // Typed-observation ingest benchmark — validates that the partition-ready
 // schema sustains high write throughput and index-backed range queries, the

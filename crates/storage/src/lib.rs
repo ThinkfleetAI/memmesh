@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Storage abstraction. The `Storage` trait is the architectural cornerstone
 //! of the engine — every downstream crate (server, mcp, sync, audit) talks to
@@ -14,12 +14,15 @@
 //! timestamptz).
 
 pub mod budget;
+pub mod consolidate;
+pub mod embedding;
 pub mod entity_resolver;
 pub mod error;
 pub mod graph_extractor;
 pub mod observe;
 pub mod query;
 pub mod quota;
+pub mod search;
 pub mod temporal;
 pub mod validate;
 

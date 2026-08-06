@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Observation entrypoint — runs heuristic extraction on a raw text input
 //! and writes the resulting `MemoryItem`s through a Storage backend.
@@ -136,6 +136,11 @@ pub async fn observe<S: Storage>(
         };
 
         storage.save(&item).await?;
+
+        // Generate + store the semantic embedding for this item so it's
+        // retrievable by meaning, not just substring. No-op when embeddings are
+        // disabled; never fatal (the memory is already persisted).
+        crate::embedding::embed_and_store(storage, &item.id, &item.content).await;
 
         // Self-wiring graph: scan this item's content for entity
         // mentions and typed relationships, populate memory_entity +

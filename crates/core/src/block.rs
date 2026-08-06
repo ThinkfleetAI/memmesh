@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Memory block — labeled scratchpad. Mirrors `agent_memory_block`.
 //! Useful for "always-visible" facts the agent should keep top-of-mind

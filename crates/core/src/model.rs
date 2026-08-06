@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Domain model for memory items. Column-for-column compatible with the
 //! existing SaaS Postgres schema (`clawdbot_memory_item`,

@@ -1,4 +1,4 @@
--- Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+-- Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 --
 -- Sync foundation: per-item sync status, key/value sync state for cursors and
 -- counters, and per-machine project bindings (cwd → SaaS platform+project).

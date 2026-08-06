@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Embedding provider abstraction.
 //!
@@ -20,10 +20,14 @@
 //!
 //!   - `FastEmbedder` (feature `fastembed`) — the real local ONNX model,
 //!     in-process, no API key, no network, no data egress (which is what makes
-//!     it safe for patient data). Default model `bge-large-en-v1.5` (1024-dim);
-//!     `bge-small-en-v1.5` (384-dim) also supported. Built without the feature,
+//!     it safe for patient data). Default model `bge-small-en-v1.5` (384-dim,
+//!     small + fast, the open-source default); `bge-large-en-v1.5` (1024-dim)
+//!     also supported for max recall. Built without the feature,
 //!     [`EmbeddingConfig::Local`] degrades to [`NoneEmbedder`] rather than
 //!     failing to start.
+//!
+//! The engine defaults ([`EmbeddingConfig::default`]) to `Local` so the
+//! standard `memmesh` build has semantic search on out of the box.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -58,10 +62,16 @@ fn default_remote_dim() -> usize {
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
-        // Honest default: no semantic search until a model is configured.
-        // Flipping the default to `Local` is a one-line change once the
-        // fastembed runtime is part of the standard build.
-        EmbeddingConfig::None
+        // The open-source `memmesh` binary ships WITH the `fastembed` feature,
+        // so the honest default is real local semantic search: a small ONNX
+        // model (`bge-small-en-v1.5`, 384-dim) that runs in-process with no API
+        // key and no network egress. `model: None` selects that default model.
+        //
+        // Builds compiled WITHOUT the `fastembed` feature (e.g. the desktop
+        // app — see the tiering note in `memory_core::config`) degrade this to
+        // `NoneEmbedder` automatically, so the default is always safe: it never
+        // fails to start, it just falls back to lexical + recency ranking.
+        EmbeddingConfig::Local { model: None }
     }
 }
 
@@ -260,9 +270,12 @@ mod fast {
 
     use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
-    /// Default local model: bge-large-en-v1.5 (1024-dim) — the project's chosen
-    /// model, run on a dedicated CPU server.
-    const DEFAULT_MODEL_ID: &str = "bge-large-en-v1.5";
+    /// Default local model: bge-small-en-v1.5 (384-dim) — chosen for the
+    /// open-source local build for its small download + fast CPU inference
+    /// while still being a genuine semantic model. The heavier
+    /// `bge-large-en-v1.5` (1024-dim) remains selectable by config/model id
+    /// for deployments that want maximum recall on a dedicated box.
+    const DEFAULT_MODEL_ID: &str = "bge-small-en-v1.5";
 
     pub struct FastEmbedder {
         // fastembed's `embed` takes `&mut self`; wrap in a Mutex so the provider
@@ -429,8 +442,12 @@ mod tests {
     }
 
     #[test]
-    fn config_default_is_none() {
-        assert_eq!(EmbeddingConfig::default(), EmbeddingConfig::None);
+    fn config_default_is_local() {
+        // The open-source build defaults to a local semantic model.
+        assert_eq!(
+            EmbeddingConfig::default(),
+            EmbeddingConfig::Local { model: None }
+        );
     }
 
     #[test]

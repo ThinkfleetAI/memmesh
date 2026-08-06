@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Storage-layer query types. These are deliberately schema-shaped, not
 //! domain-shaped — they describe what rows to fetch, not what scoring to

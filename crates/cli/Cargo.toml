@@ -12,6 +12,13 @@ path = "src/main.rs"
 
 [dependencies]
 memory-core.workspace = true
+# Pull in memory-embed with the `fastembed` feature so the `memmesh` binary
+# ships real local semantic search (bge-small ONNX model, in-process, no API).
+# Feature unification means this turns the FastEmbedder on for the whole binary
+# build graph — storage/core resolve `EmbeddingConfig::Local` to the real model
+# rather than degrading to `None`. Drop this dep (or the feature) to build a
+# lexical-only binary.
+memory-embed = { workspace = true, features = ["fastembed"] }
 memory-storage.workspace = true
 memory-server.workspace = true
 memory-license.workspace = true

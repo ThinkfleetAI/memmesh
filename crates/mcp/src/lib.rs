@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Model Context Protocol (MCP) stdio server.
 //!
@@ -356,6 +356,23 @@ fn tool_definitions() -> serde_json::Value {
                 "type": "object",
                 "properties": {}
             }
+        },
+        {
+            "name": "memory_consolidate",
+            "description": "Find near-duplicate memories in a scope and non-destructively collapse the redundant ones into a survivor (via supersede — history is kept). Two memories are duplicates when their embeddings' cosine similarity is >= threshold. Safe + idempotent: re-running skips already-collapsed items. Use dryRun=true first to preview. Requires semantic embeddings; falls back to exact normalized-text equality when embeddings are off.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "platformId": { "type": ["string", "null"] },
+                    "projectId":  { "type": ["string", "null"] },
+                    "agentId":    { "type": ["string", "null"] },
+                    "userId":     { "type": ["string", "null"] },
+                    "scope":      { "type": ["string", "null"], "enum": ["platform","project","location","agent","user","session", null] },
+                    "type":       { "type": ["string", "null"] },
+                    "threshold":  { "type": "number", "default": 0.95, "description": "Cosine similarity at/above which two memories are collapsed. Higher = stricter." },
+                    "dryRun":     { "type": "boolean", "default": false, "description": "Preview collapses without writing." }
+                }
+            }
         }
     ])
 }
@@ -423,6 +440,8 @@ async fn handle_tool_call<S: Storage>(
                 return Ok(text_result(&format!("rejected: {e}")));
             }
             storage.save(&item).await?;
+            // Index for semantic search (no-op when embeddings are off).
+            memory_storage::embedding::embed_and_store(storage, &item.id, &item.content).await;
             Ok(text_result(&format!("saved {}", item.id)))
         }
 
@@ -436,16 +455,22 @@ async fn handle_tool_call<S: Storage>(
         }
 
         "memory_search" | "memory_list" => {
-            let filter = filter_from_args(args)?;
+            let mut filter = filter_from_args(args)?;
+            // The free-text query is carried in `text_match` by filter_from_args;
+            // pull it out and route it through the hybrid searcher (semantic +
+            // lexical + recency). `memory_list` (no query) degrades to recency
+            // order automatically.
+            let query = filter.text_match.take();
             let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as u32;
             let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-            let rows = storage
-                .query(&MemoryQuery {
-                    filter,
-                    limit: Some(limit),
-                    offset: Some(offset),
-                })
-                .await?;
+            let rows = memory_storage::search::search(
+                storage,
+                &filter,
+                query.as_deref(),
+                limit,
+                offset,
+            )
+            .await?;
             Ok(text_result(&serde_json::to_string_pretty(&rows)?))
         }
 
@@ -475,6 +500,44 @@ async fn handle_tool_call<S: Storage>(
             Ok(text_result(&serde_json::to_string_pretty(
                 &serde_json::json!({ "totalMemories": total }),
             )?))
+        }
+
+        "memory_consolidate" => {
+            let filter = MemoryFilter {
+                platform_id: arg_opt(args, "platformId"),
+                project_id: arg_opt(args, "projectId"),
+                agent_id: arg_opt(args, "agentId"),
+                user_id: arg_opt(args, "userId"),
+                scope: args
+                    .get("scope")
+                    .and_then(|v| v.as_str())
+                    .map(scope_from_str)
+                    .transpose()?,
+                kind: arg_opt(args, "type"),
+                ..Default::default()
+            };
+            let threshold = args.get("threshold").and_then(|v| v.as_f64()).unwrap_or(0.95) as f32;
+            let dry_run = args.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(false);
+            let report =
+                memory_storage::consolidate::consolidate(storage, &filter, threshold, dry_run)
+                    .await?;
+            let lines: Vec<String> = report
+                .collapses
+                .iter()
+                .map(|c| format!("  {} → {} (cosine {:.3})", c.loser_id, c.survivor_id, c.similarity))
+                .collect();
+            let matcher = if report.semantic { "cosine embeddings" } else { "exact text (no embeddings)" };
+            let mode = if report.dry_run { " (dry run — nothing written)" } else { "" };
+            let summary = format!(
+                "consolidate: scanned {} item(s), collapsed {} duplicate(s) at threshold {:.2} via {}{}{}",
+                report.scanned,
+                report.collapses.len(),
+                report.threshold,
+                matcher,
+                mode,
+                if lines.is_empty() { String::new() } else { format!("\n{}", lines.join("\n")) },
+            );
+            Ok(text_result(&summary))
         }
 
         other => anyhow::bail!("unknown tool: {other}"),

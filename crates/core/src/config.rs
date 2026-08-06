@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Engine configuration. Loaded from `$THINKFLEET_MEMORY_CONFIG` or
 //! `~/.memmesh/config.toml`. Missing file is fine — the engine
@@ -31,17 +31,19 @@ pub struct Config {
     /// Cap config. Defaults applied if missing.
     #[serde(default)]
     pub free_tier: FreeTierConfig,
-    /// Embedding provider for semantic search. Defaults to `None` (semantic
-    /// search off; lexical ranking only).
+    /// Embedding provider for semantic search. Defaults to `Local` (the small
+    /// in-process `bge-small-en-v1.5` model) so the open-source `memmesh` build
+    /// has real semantic search on out of the box. Override the `[embeddings]`
+    /// section (or the `THINKFLEET_EMBEDDINGS_*` env vars) to pick a different
+    /// model, a remote provider, or turn it off (`provider = "none"`).
     ///
-    /// TIERING NOTE: the heavy local model (bge-large via the `fastembed`
-    /// build feature) is intended for **SaaS + on-prem installs only** — it
-    /// pulls a ~1.3 GB model + the ONNX runtime, which has no business in the
-    /// desktop app. The desktop build ships *without* the `fastembed` feature,
-    /// so even an `[embeddings] provider = "local"` config there degrades to
-    /// `None`. Desktop semantic search, if wanted, comes via a future
-    /// `Remote` provider pointing at the user's SaaS/on-prem engine, or an
-    /// opt-in tiny local model — never the bundled heavy model.
+    /// TIERING NOTE: the heavier `bge-large-en-v1.5` model + the ONNX runtime
+    /// have no business in the lightweight desktop app. The desktop build ships
+    /// *without* the `fastembed` feature, so any `[embeddings] provider =
+    /// "local"` config there (including this default) degrades cleanly to
+    /// `None` — lexical + recency ranking, never a failure to start. Desktop
+    /// semantic search, if wanted, comes via a `Remote` provider pointing at
+    /// the user's SaaS/on-prem engine.
     #[serde(default)]
     pub embeddings: memory_embed::EmbeddingConfig,
 }
@@ -274,12 +276,16 @@ mod tests {
     }
 
     #[test]
-    fn embeddings_defaults_to_none_and_parses_local() {
-        // No [embeddings] section → None (semantic off; desktop default).
+    fn embeddings_defaults_to_local_and_parses_explicit() {
+        // No [embeddings] section → Local (semantic on by default in the
+        // open-source build; degrades to None when built without fastembed).
         let c: Config = toml::from_str("").unwrap();
-        assert_eq!(c.embeddings, memory_embed::EmbeddingConfig::None);
+        assert_eq!(
+            c.embeddings,
+            memory_embed::EmbeddingConfig::Local { model: None }
+        );
 
-        // A local-provider section round-trips.
+        // An explicit local-provider section round-trips.
         let c: Config = toml::from_str(
             "[embeddings]\nprovider = \"local\"\nmodel = \"bge-large-en-v1.5\"\n",
         )
@@ -288,6 +294,10 @@ mod tests {
             c.embeddings,
             memory_embed::EmbeddingConfig::Local { model: Some("bge-large-en-v1.5".into()) }
         );
+
+        // Semantic search can still be turned off explicitly.
+        let c: Config = toml::from_str("[embeddings]\nprovider = \"none\"\n").unwrap();
+        assert_eq!(c.embeddings, memory_embed::EmbeddingConfig::None);
     }
 
     #[test]

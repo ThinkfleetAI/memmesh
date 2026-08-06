@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Typed-attribute domain model — the keystone that lets the engine reason
 //! over structured/numeric data (credit scores, sensor readings, balances)

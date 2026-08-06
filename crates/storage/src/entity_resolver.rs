@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! Entity identity resolution — the missing primitive that lets every
 //! mention of "Kevin" / "Kevin Smith" / "kevin@gotolig.com" resolve to

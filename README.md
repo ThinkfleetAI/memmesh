@@ -28,7 +28,8 @@ MemMesh takes the opposite path: **one binary, one file, everything local.**
 |---|---|---|
 | **Runtime** | One Rust binary (SQLite or Postgres) | App + external vector DB (+ search service) |
 | **Privacy** | Data never leaves your machine | Memories shipped to a hosted store |
-| **LLM calls** | **None required** — heuristic capture + a zero-LLM knowledge graph | An extraction call per message |
+| **Retrieval** | **Semantic + keyword hybrid** — local embeddings, no vector DB to run | Hosted vector store |
+| **API calls** | **None** — heuristic capture + a **local** embedding model, nothing leaves the box | An extraction/embedding call per message |
 | **Time model** | Bi-temporal (*when it happened* vs *when you learned it*) | Flat timestamps |
 | **Protocol** | MCP-native — works in Claude Code, Cursor, Windsurf, Codex today | Framework-specific SDK |
 | **License** | Apache-2.0, no limits | Varies |
@@ -36,17 +37,24 @@ MemMesh takes the opposite path: **one binary, one file, everything local.**
 ## ⚡ 60-second quickstart
 
 ```sh
-# 1. Build (Rust 1.78+)
-cargo build --release --bin memmesh
+# 1. Install a prebuilt binary — no Rust toolchain needed
+curl -fsSL https://memmesh.ai/install.sh | sh          # macOS / Linux
+# Windows (PowerShell):  irm https://memmesh.ai/install.ps1 | iex
+# (or build from source: cargo build --release --bin memmesh)
 
 # 2. Wire it into every AI tool on your machine — one command
-./target/release/memmesh install
+memmesh install
 
-# 3. Watch it remember
-./target/release/memmesh observe --content "Ryan prefers pnpm over npm for all projects."
-./target/release/memmesh search  --query   "pnpm"
+# 3. Watch it remember (and find it by meaning, not just keywords)
+memmesh observe --content "Ryan prefers pnpm over npm for all projects."
+memmesh search  --query   "which package manager"      # semantic — no shared words
 # → returns the stored memory, typed and timestamped
 ```
+
+> First `observe`/`search` downloads a small local embedding model (bge-small,
+> ~130 MB) into MemMesh's cache — once, no API key, no data egress. Semantic
+> search is on by default; set `[embeddings] provider = "none"` to run pure
+> keyword + recency.
 
 `memmesh install` detects each supported tool, merges an MCP server block into its config (your other MCP servers are untouched), and drops the teaching skill in the right place.
 
@@ -59,6 +67,24 @@ cargo build --release --bin memmesh
 
 Restart the host tool afterward so it reloads its config. Useful flags: `--dry-run`, `--tool <id>` (repeatable), `--mcp-only` (skip the skill), `--no-hooks` (skip the Claude Code auto-observe hook), `--force`.
 
+## 🪝 Send everything — let the engine decide what to remember
+
+You don't have to tell your agent *"remember this."* On Claude Code, `memmesh install`
+also wires two hooks so memory just *happens*:
+
+- **`UserPromptSubmit` → `memmesh observe`** — every prompt is piped to the engine,
+  which runs its heuristic filter and keeps only the substantive bits (preferences,
+  decisions, facts) while dropping conversational filler. Fully local, no LLM, no egress.
+- **`SessionStart` → `memmesh search --format claude-context`** — relevant memories are
+  injected back into the context when a new session opens, so the agent starts already
+  knowing what it learned last time.
+
+The net effect: **fire the whole conversation at memory and let the engine curate it** —
+capture without deciding what's worth capturing, recall without asking. Wire the same
+pattern into any tool that supports pre-prompt / session hooks (Codex, custom agents):
+just pipe raw text to `memmesh observe --json` and read `memmesh search --format claude-context`.
+Skip it with `--no-hooks` if you'd rather call the memory tools explicitly.
+
 ## 🛠️ CLI
 
 The binary opens `~/.memmesh/memory.db` by default (override with `--db <path>`):
@@ -69,7 +95,8 @@ memmesh observe --content "We decided to use Postgres for the memory backend."
 memmesh save --platform local --project alpha --type fact \
              --content "Sarah prefers email over phone"
 memmesh get <id>                      # fetch by id
-memmesh search --query "Sarah" --project alpha --limit 10
+memmesh search --query "Sarah" --project alpha --limit 10   # semantic + keyword hybrid
+memmesh consolidate --dry-run         # collapse near-duplicate memories (non-destructive)
 memmesh mcp                           # run as an MCP stdio server
 ```
 
@@ -84,10 +111,11 @@ Underscore names are canonical; dot names are accepted as legacy aliases.
 | `memory_observe` | Feed raw text; substantive statements are captured automatically (primary write path) |
 | `memory_save` | Upsert a memory item with scope, type, content, importance |
 | `memory_recall` | Fetch by id (reinforces the item on access) |
-| `memory_search` | Filter by scope / project / agent / user / session + content match |
+| `memory_search` | **Semantic + keyword hybrid** search (local embeddings), filtered by scope / project / agent / user / session |
 | `memory_list` | Most-recent items in a scope |
 | `memory_delete` | Forget an item — soft delete (default, recoverable) or hard delete |
 | `memory_supersede` | Record a correction (the old item is kept for provenance) |
+| `memory_consolidate` | Collapse near-duplicate memories into a survivor (non-destructive supersede; dry-run supported) |
 | `memory_stats` | Total count of stored memories |
 | `memory_extract_pending` / `memory_commit_extraction` | Client-LLM knowledge-graph extraction — **your** model, your key, your rate limit (the engine never calls an LLM) |
 
@@ -126,4 +154,4 @@ Issues and PRs welcome. MemMesh is Apache-2.0 and built to be embedded, extended
 
 ## 📄 License
 
-[Apache License 2.0](LICENSE). © 2026 ThinkFleet, Inc. and MemMesh contributors.
+[Apache License 2.0](LICENSE). © 2026 Thinkfleet AI, LLC and MemMesh contributors.

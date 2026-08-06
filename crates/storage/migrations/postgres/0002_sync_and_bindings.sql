@@ -1,4 +1,4 @@
--- Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+-- Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 --
 -- Postgres mirror of the local sync foundation. Used when the engine runs in
 -- a Postgres-backed mode (self-hosted SaaS install). The hosted SaaS uses

@@ -1,4 +1,4 @@
-// Copyright 2026 ThinkFleet, Inc. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 Thinkfleet AI, LLC Licensed under the Apache License, Version 2.0.
 
 //! PostgresStore — SaaS backend. Reads / writes the same tables the
 //! existing TypeScript activepieces API uses. Schema parity is enforced by
