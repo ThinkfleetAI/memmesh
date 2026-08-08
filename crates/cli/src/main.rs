@@ -606,6 +606,18 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
                     extract_hook_prompt(&buf).unwrap_or(buf)
                 }
             };
+            // Drop harness/tool noise before it ever reaches the engine.
+            // task-notifications, system-reminders, and command wrappers are
+            // machine chatter, not things worth remembering — capturing them
+            // pollutes recall and buries the real memories.
+            if is_noise(&text) {
+                if json {
+                    println!("{}", serde_json::json!({"saved": [], "candidateCount": 0, "skipped": "noise"}));
+                } else {
+                    println!("observed: 0 saved (filtered harness noise)");
+                }
+                return Ok(());
+            }
             let role_parsed = match role.as_str() {
                 "user" => Some(memory_core::extraction::ObserveRole::User),
                 "assistant" => Some(memory_core::extraction::ObserveRole::Assistant),
@@ -668,7 +680,7 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
             };
             // Hybrid semantic + lexical + recency ranking. Falls back to the
             // lexical substring path automatically when embeddings are off.
-            let rows = memory_storage::search::search(
+            let mut rows = memory_storage::search::search(
                 store.as_ref(),
                 &filter,
                 query.as_deref(),
@@ -676,6 +688,18 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
                 offset,
             )
             .await?;
+            // For session-start injection (claude-context, typically no query)
+            // lead with the highest-value memories — facts / rules / preferences
+            // (importance ~8) before raw conversational observations (~3) — so
+            // the model sees signal first instead of recency-ordered chatter.
+            if format == "claude-context" {
+                rows.sort_by(|a, b| {
+                    b.importance
+                        .partial_cmp(&a.importance)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b.created.cmp(&a.created))
+                });
+            }
             match format.as_str() {
                 "json" => println!("{}", serde_json::to_string_pretty(&rows)?),
                 "claude-context" => {
@@ -1393,6 +1417,26 @@ fn extract_hook_prompt(raw: &str) -> Option<String> {
         .and_then(|p| p.as_str())
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.to_string())
+}
+
+/// True for machine/harness chatter that should never be remembered:
+/// task-notification and system-reminder blocks injected by the AI tool,
+/// command wrappers, and empty input. These arrive through the same hook
+/// path as real prompts but carry no durable user intent.
+fn is_noise(text: &str) -> bool {
+    let t = text.trim_start();
+    if t.is_empty() {
+        return true;
+    }
+    const NOISE_PREFIXES: &[&str] = &[
+        "<task-notification",
+        "<system-reminder",
+        "<local-command",
+        "<command-name",
+        "<command-message",
+        "[SYSTEM NOTIFICATION",
+    ];
+    NOISE_PREFIXES.iter().any(|p| t.starts_with(p))
 }
 
 fn detect_os_user() -> String {
