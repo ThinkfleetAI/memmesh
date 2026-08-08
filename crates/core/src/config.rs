@@ -46,6 +46,42 @@ pub struct Config {
     /// the user's SaaS/on-prem engine.
     #[serde(default)]
     pub embeddings: memory_embed::EmbeddingConfig,
+    /// Which storage backend the engine binds to at startup. Defaults to
+    /// SQLite (local file). Set `backend = "postgres"` + a `url` to run
+    /// against a Postgres instance instead. Changing this takes effect the
+    /// next time each `memmesh` process starts (console, `serve`, and every
+    /// MCP server an AI tool spawns).
+    #[serde(default)]
+    pub database: DatabaseConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    /// `sqlite` (default) or `postgres`.
+    #[serde(default)]
+    pub backend: DatabaseBackend,
+    /// Postgres connection URL (`postgres://user:pass@host:5432/dbname`).
+    /// Required when `backend = "postgres"`; ignored for sqlite, which uses
+    /// the `--db` path / `THINKFLEET_MEMORY_DB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DatabaseBackend {
+    #[default]
+    Sqlite,
+    Postgres,
+}
+
+impl DatabaseBackend {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DatabaseBackend::Sqlite => "sqlite",
+            DatabaseBackend::Postgres => "postgres",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +176,23 @@ impl Config {
             .join("config.toml")
     }
 
+    /// Directory where the engine writes rotating log files. `~/.memmesh/logs`
+    /// unless `THINKFLEET_MEMORY_LOG_DIR` overrides it. Every `memmesh`
+    /// process (mcp / serve / console) appends to the same file here, so the
+    /// web console can tail a single unified log across all engine activity.
+    pub fn log_dir() -> PathBuf {
+        if let Ok(p) = std::env::var("THINKFLEET_MEMORY_LOG_DIR") {
+            return PathBuf::from(p);
+        }
+        let home = std::env::var_os("HOME").unwrap_or_default();
+        PathBuf::from(home).join(".memmesh").join("logs")
+    }
+
+    /// The unified engine log file (`<log_dir>/memmesh.log`).
+    pub fn log_file() -> PathBuf {
+        Self::log_dir().join("memmesh.log")
+    }
+
     /// True iff sync section is fully populated. The engine treats this as
     /// "attempt SaaS-connected mode" — the token still has to validate
     /// successfully on its first sync attempt before paid features unlock.
@@ -227,6 +280,17 @@ impl Config {
             };
             if let Some(c) = cfg {
                 self.embeddings = c;
+            }
+        }
+
+        // Backend selection via env. `THINKFLEET_DATABASE_URL` (or the sqlx
+        // convention `DATABASE_URL`) switches the engine to Postgres and
+        // supplies the DSN — handy for CI, containers, and one-off overrides
+        // without editing the TOML.
+        if let Ok(url) = std::env::var("THINKFLEET_DATABASE_URL").or_else(|_| std::env::var("DATABASE_URL")) {
+            if !url.is_empty() {
+                self.database.backend = DatabaseBackend::Postgres;
+                self.database.url = Some(url);
             }
         }
     }

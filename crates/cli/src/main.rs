@@ -17,9 +17,10 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use installer::{Action, SkillBundle, Tool};
+use memory_core::config::DatabaseBackend;
 use memory_core::{MemoryItem, MemoryScope};
 use memory_license::License;
-use memory_storage::{sqlite::SqliteStore, MemoryFilter, Storage};
+use memory_storage::{postgres::PostgresStore, sqlite::SqliteStore, MemoryFilter, Storage};
 use std::sync::Arc;
 
 /// Default DB path under $XDG_DATA_HOME / ~/.local/share / fallback CWD.
@@ -203,6 +204,18 @@ enum Cmd {
         /// Address to bind. Default 127.0.0.1:7878.
         #[arg(long, default_value = "127.0.0.1:7878")]
         http: String,
+    },
+
+    /// Launch the local web console: starts the REST API, serves the
+    /// memory management UI, and opens it in your browser. One command to
+    /// see engine status, browse memories, tail logs, and tweak config.
+    Console {
+        /// Address to bind. Default 127.0.0.1:7878.
+        #[arg(long, default_value = "127.0.0.1:7878")]
+        http: String,
+        /// Don't auto-open a browser; just print the URL.
+        #[arg(long)]
+        no_open: bool,
     },
 
     /// Manage the agent teaching skill (markdown that tells the AI when
@@ -448,21 +461,49 @@ const SKILL_MD: &str = include_str!("../../../skills/memmesh/SKILL.md");
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    init_tracing(&cli.log)?;
-
-    let db_url = format!("sqlite://{}?mode=rwc", cli.db);
-    let store = SqliteStore::connect(&db_url)
-        .await
-        .with_context(|| format!("opening sqlite store at {}", cli.db))?;
-    store.migrate().await.context("running migrations")?;
-    let store = Arc::new(store);
+    // Hold the log-file guard for the whole process so buffered log lines
+    // flush on exit. Dropping it early would truncate the tail of the log.
+    let _log_guard = init_tracing(&cli.log)?;
 
     // Resolve license once per CLI invocation. `tflk_...` license keys
     // trigger an HTTP exchange against the SaaS to receive a JWT; raw
-    // JWTs verify locally without network. Kept immutable for the rest
-    // of main(). Phase 2 will add runtime refresh.
+    // JWTs verify locally without network.
     let license = License::load_from_env(Utc::now()).await;
 
+    // Pick the storage backend from config, then dispatch into the generic
+    // `run`. Both arms monomorphize `run` — the whole command surface works
+    // identically on SQLite or Postgres.
+    let cfg = memory_core::config::Config::load_or_default();
+    match cfg.database.backend {
+        DatabaseBackend::Sqlite => {
+            let db_url = format!("sqlite://{}?mode=rwc", cli.db);
+            let store = SqliteStore::connect(&db_url)
+                .await
+                .with_context(|| format!("opening sqlite store at {}", cli.db))?;
+            store.migrate().await.context("running migrations")?;
+            run(Arc::new(store), cli, license).await
+        }
+        DatabaseBackend::Postgres => {
+            let url = cfg.database.url.clone().ok_or_else(|| {
+                anyhow!(
+                    "[database] backend is \"postgres\" but no url is set. Add a url \
+                     to ~/.memmesh/config.toml (or set THINKFLEET_DATABASE_URL), or \
+                     switch back to sqlite in the console."
+                )
+            })?;
+            let store = PostgresStore::connect(&url)
+                .await
+                .with_context(|| "connecting to postgres")?;
+            store.migrate().await.context("running postgres migrations")?;
+            tracing::info!("storage backend: postgres");
+            run(Arc::new(store), cli, license).await
+        }
+    }
+}
+
+/// Generic command dispatch — runs against whichever `Storage` backend
+/// `main` selected. Monomorphized once per backend.
+async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()> {
     match cli.cmd {
         Cmd::Migrate => {
             let version = store.migrate().await?;
@@ -708,6 +749,42 @@ async fn main() -> Result<()> {
                 });
             }
             tracing::info!(db = %cli.db, addr = %http, "starting HTTP API");
+            memory_server::serve_http(store, &http).await?;
+        }
+
+        Cmd::Console { http, no_open } => {
+            // Same server as `serve` (REST + embedded UI), plus a friendly
+            // banner and an auto-opened browser. Kick off background sync if
+            // SaaS is configured, exactly like `serve`.
+            let cfg = memory_core::config::Config::load_or_default();
+            if let Some(sync_cfg) = cfg.sync.clone() {
+                let sync_store = store.clone();
+                tokio::spawn(async move {
+                    run_sync_daemon(sync_store, sync_cfg).await;
+                });
+            }
+            let url = format!("http://{http}");
+            println!();
+            println!("  MemMesh console");
+            println!("  ───────────────");
+            println!("  engine : {}", cli.db);
+            println!("  logs   : {}", memory_core::config::Config::log_file().display());
+            println!("  url    : {url}");
+            println!();
+            if no_open {
+                println!("  Open {url} in your browser.");
+            } else {
+                // Delay the launch briefly so the listener is bound before the
+                // browser requests the page (avoids a first-load failure).
+                let url_for_open = url.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    open_browser(&url_for_open);
+                });
+                println!("  Opening browser… (Ctrl-C to stop the console)");
+            }
+            println!();
+            tracing::info!(db = %cli.db, addr = %http, "starting web console");
             memory_server::serve_http(store, &http).await?;
         }
 
@@ -1079,8 +1156,8 @@ fn format_claude_context(rows: &[MemoryItem], project_hint: Option<&str>) -> Str
 /// once at startup, then loops on `interval_seconds`, calling
 /// `run_cycle` each tick. Errors are logged but never panic the loop;
 /// the next tick retries.
-async fn run_sync_daemon(
-    store: std::sync::Arc<memory_storage::sqlite::SqliteStore>,
+async fn run_sync_daemon<S: Storage>(
+    store: std::sync::Arc<S>,
     sync_cfg: memory_core::config::SyncConfig,
 ) {
     let client = match memory_sync::SyncClient::new(sync_cfg.url.clone(), sync_cfg.token.clone()) {
@@ -1273,15 +1350,63 @@ fn parse_scope(s: &str) -> Result<MemoryScope> {
     })
 }
 
-fn init_tracing(level: &str) -> Result<()> {
-    // The MCP stdio server uses stdout for protocol traffic, so logs MUST
-    // go to stderr. tracing_subscriber::fmt defaults to stdout — switch
-    // explicitly. Honor RUST_LOG if set.
-    use tracing_subscriber::EnvFilter;
+/// Initialize logging. Logs go to **stderr** (the MCP stdio server uses
+/// stdout for protocol traffic, so logs must never touch it) **and** are
+/// appended to a unified log file at `~/.memmesh/logs/memmesh.log` that the
+/// web console tails. Returns the file-writer guard, which the caller must
+/// hold for the process lifetime so buffered lines flush on exit.
+fn init_tracing(level: &str) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(filter)
+
+    let stderr_layer = fmt::layer().with_writer(std::io::stderr);
+
+    // Best-effort file layer — if the log dir can't be created we just log to
+    // stderr and carry on rather than failing to start the engine.
+    let (file_layer, guard) = match open_log_writer() {
+        Some((writer, guard)) => (
+            Some(fmt::layer().with_ansi(false).with_writer(writer)),
+            Some(guard),
+        ),
+        None => (None, None),
+    };
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(stderr_layer)
+        .with(file_layer)
         .init();
-    Ok(())
+    Ok(guard)
+}
+
+/// Open the unified log file for appending, wrapped in a non-blocking writer.
+/// Every `memmesh` process appends to the same file so the console shows one
+/// timeline across `mcp`, `serve`, and `console`.
+fn open_log_writer() -> Option<(
+    tracing_appender::non_blocking::NonBlocking,
+    tracing_appender::non_blocking::WorkerGuard,
+)> {
+    let dir = memory_core::config::Config::log_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    // `never` = no rotation; a single append-only file, which is what makes
+    // concurrent appends from multiple processes behave predictably.
+    let appender = tracing_appender::rolling::never(&dir, "memmesh.log");
+    Some(tracing_appender::non_blocking(appender))
+}
+
+/// Best-effort: open `url` in the user's default browser. Never fails the
+/// command — if it can't spawn, the URL was already printed for manual use.
+fn open_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    let (bin, args): (&str, Vec<&str>) = ("open", vec![url]);
+    #[cfg(target_os = "linux")]
+    let (bin, args): (&str, Vec<&str>) = ("xdg-open", vec![url]);
+    #[cfg(target_os = "windows")]
+    let (bin, args): (&str, Vec<&str>) = ("cmd", vec!["/C", "start", "", url]);
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let (bin, args): (&str, Vec<&str>) = ("true", vec![]);
+
+    if let Err(e) = std::process::Command::new(bin).args(&args).spawn() {
+        tracing::warn!(error = %e, "could not launch browser; open the URL manually");
+    }
 }
