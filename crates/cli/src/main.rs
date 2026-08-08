@@ -598,7 +598,12 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
                     use std::io::Read;
                     let mut buf = String::new();
                     std::io::stdin().read_to_string(&mut buf)?;
-                    buf
+                    // AI-tool hooks (Claude Code's UserPromptSubmit, etc.) deliver
+                    // their input as a JSON envelope on stdin, not the raw prompt —
+                    // e.g. {"hook_event_name":"UserPromptSubmit","prompt":"…"}.
+                    // Observing the wrapper JSON extracts nothing, so pull the
+                    // actual prompt out when we recognize that shape.
+                    extract_hook_prompt(&buf).unwrap_or(buf)
                 }
             };
             let role_parsed = match role.as_str() {
@@ -1367,6 +1372,27 @@ fn detect_git_project() -> Option<String> {
     let trimmed = path.trim();
     let last = std::path::Path::new(trimmed).file_name()?.to_str()?;
     Some(last.to_string())
+}
+
+/// AI-tool hooks pipe a JSON envelope to stdin rather than the raw prompt.
+/// Claude Code's `UserPromptSubmit` sends
+/// `{"hook_event_name":"UserPromptSubmit","prompt":"…","session_id":…,…}`.
+/// Detect that envelope and return the inner prompt so `observe` runs on the
+/// user's text, not the wrapper. Returns `None` for plain text (observe as-is)
+/// — a bare prompt won't parse as a JSON object with these hook markers.
+fn extract_hook_prompt(raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let obj = v.as_object()?;
+    let is_hook_envelope = obj.contains_key("hook_event_name")
+        || obj.contains_key("session_id")
+        || obj.contains_key("transcript_path");
+    if !is_hook_envelope {
+        return None;
+    }
+    obj.get("prompt")
+        .and_then(|p| p.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
 }
 
 fn detect_os_user() -> String {
