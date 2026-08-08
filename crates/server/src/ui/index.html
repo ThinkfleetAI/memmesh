@@ -238,7 +238,7 @@
       <div class="hint" style="margin-top:6px">Working-directory → SaaS project mappings. Memories written from a bound directory push to that central project when connected.</div>
       <div class="list" id="bindingList"></div>
     </div>
-    <div class="hint" style="margin-top:14px">Managed source connectors (SharePoint, Google Drive, Notion) are on the roadmap and not part of the local engine — this panel surfaces the built-in SaaS sync + bindings.</div>
+    <div class="hint" style="margin-top:14px">Managed source connectors (SharePoint, Google Drive, Notion) are part of the MemMesh SaaS product, not the local open-source engine — this panel surfaces the engine's built-in SaaS sync + project bindings.</div>
   </section>
 
   <!-- LOGS -->
@@ -328,8 +328,7 @@ async function poll() {
     $('#verText').textContent = `${h.name} v${h.version} · ${h.backend}`;
     const st = await api('/stats');
     $('#statCards').innerHTML = [
-      ['memories', st.total], ['indexed', st.withEmbedding],
-      ['un-indexed', st.withoutEmbedding], ['behavior patterns', st.patternCount],
+      ['memories', st.total], ['indexed', st.withEmbedding], ['un-indexed', st.withoutEmbedding],
     ].map(([l, n]) => `<div class="card"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`).join('');
     renderBars('#barsScope', st.byScope); renderBars('#barsType', st.byType); renderBars('#barsStatus', st.byStatus);
     const cov = st.total ? Math.round(st.withEmbedding / st.total * 100) : 0;
