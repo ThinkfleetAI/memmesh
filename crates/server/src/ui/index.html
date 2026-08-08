@@ -91,6 +91,20 @@
   .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .prov { font-size: 11px; color: var(--muted); margin-top: 8px; font-family: var(--mono); display: flex; gap: 10px; flex-wrap: wrap; }
   .prov .sup { color: var(--warn); }
+  .dash { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .bars { margin-top: 10px; display: flex; flex-direction: column; gap: 7px; }
+  .bar { display: grid; grid-template-columns: 90px 1fr 38px; gap: 8px; align-items: center; font-size: 12px; }
+  .bar .k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar .t { background: var(--panel-2); border-radius: 5px; height: 10px; overflow: hidden; }
+  .bar .t span { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+  .bar .v { text-align: right; color: var(--fg); font-family: var(--mono); }
+  .cov { margin-top: 10px; }
+  .covbar { background: var(--panel-2); border-radius: 6px; height: 14px; overflow: hidden; }
+  .covbar span { display: block; height: 100%; background: var(--ok); }
+  .cov #covText { margin-top: 6px; }
+  .pg { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .pgcol .item { padding: 9px 11px; }
+  @media (max-width: 720px) { .pg { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -105,6 +119,9 @@
   <button data-tab="memories">Memories</button>
   <button data-tab="graph">Graph</button>
   <button data-tab="context">Context</button>
+  <button data-tab="duplicates">Duplicates</button>
+  <button data-tab="playground">Playground</button>
+  <button data-tab="sync">Sync</button>
   <button data-tab="logs">Logs</button>
   <button data-tab="config">Config</button>
 </nav>
@@ -112,17 +129,26 @@
   <!-- STATUS -->
   <section id="tab-status">
     <div class="cards" id="statCards"></div>
-    <div class="card">
-      <div class="l" style="margin-bottom:8px">Maintenance — consolidate duplicates</div>
-      <div class="hint">Finds near-duplicate memories and non-destructively collapses them (history kept via supersede). Preview first.</div>
-      <div class="row">
-        <label class="check">threshold
-          <input id="consThreshold" type="text" value="0.95" style="width:70px;flex:none" />
-        </label>
-        <button class="btn" id="consPreview">Preview (dry run)</button>
-        <button class="btn danger" id="consApply">Apply</button>
+    <div class="dash">
+      <div class="card"><div class="l">By scope</div><div class="bars" id="barsScope"></div></div>
+      <div class="card"><div class="l">By type</div><div class="bars" id="barsType"></div></div>
+      <div class="card"><div class="l">By status</div><div class="bars" id="barsStatus"></div></div>
+    </div>
+    <div class="dash">
+      <div class="card">
+        <div class="l">Semantic index coverage</div>
+        <div class="cov"><div class="covbar"><span id="covFill"></span></div><div id="covText" class="muted"></div></div>
+        <div class="hint" style="margin:8px 0 0">Memories with an embedding vector are searchable semantically; the rest fall back to lexical + recency.</div>
       </div>
-      <div id="consOut" class="muted"></div>
+      <div class="card">
+        <div class="l">LLM budget <span class="muted">(this month)</span></div>
+        <div id="budgetBody" class="muted" style="margin-top:6px">Loading…</div>
+        <div class="row" style="margin-top:10px">
+          <input id="capUsd" type="text" placeholder="cap in USD (blank = none)" style="max-width:190px" />
+          <button class="btn" id="saveCap">Set cap</button>
+          <button class="btn" id="clearCap">Clear</button>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -165,6 +191,54 @@
     <div class="hint">Exactly the memory block that gets injected into an AI tool's context for this query — the same <code>claude-context</code> format the SessionStart hook uses. This is “what the AI actually sees.”</div>
     <div class="row"><span class="muted" id="ctxMeta"></span><span class="spacer"></span><button class="btn" id="ctxCopy">Copy</button></div>
     <pre class="logs" id="ctxBlock" style="max-height:58vh"></pre>
+  </section>
+
+  <!-- DUPLICATES -->
+  <section id="tab-duplicates" class="hidden">
+    <div class="row">
+      <label class="check">similarity ≥ <input id="dupThreshold" type="text" value="0.92" style="width:64px;flex:none" /></label>
+      <button class="btn primary" id="dupFind">Find duplicates</button>
+      <button class="btn danger" id="dupMergeAll">Merge all</button>
+      <span class="muted" id="dupStat"></span>
+    </div>
+    <div class="hint">Review near-duplicate memories before merging. “Merge” supersedes the redundant item into the survivor — the original is kept for history, never hard-deleted. Requires embeddings for cosine matching (falls back to exact-text otherwise).</div>
+    <div class="list" id="dupList"></div>
+  </section>
+
+  <!-- PLAYGROUND -->
+  <section id="tab-playground" class="hidden">
+    <div class="hint">Compare retrieval side by side — tweak the query wording or <code>k</code> and see how the returned set changes. This is the ranking behavior your AI tools get.</div>
+    <div class="pg">
+      <div class="pgcol">
+        <div class="row"><input id="pgqA" type="text" placeholder="Query A" /><select id="pgkA"><option>5</option><option selected>10</option><option>30</option></select></div>
+        <div class="muted" id="pgmetaA"></div>
+        <div class="list" id="pgA"></div>
+      </div>
+      <div class="pgcol">
+        <div class="row"><input id="pgqB" type="text" placeholder="Query B" /><select id="pgkB"><option>5</option><option selected>10</option><option>30</option></select></div>
+        <div class="muted" id="pgmetaB"></div>
+        <div class="list" id="pgB"></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" id="pgRun">Run both</button></div>
+  </section>
+
+  <!-- SYNC -->
+  <section id="tab-sync" class="hidden">
+    <div class="card" style="margin-bottom:16px">
+      <div class="l">Sync</div>
+      <div id="syncBody" class="muted" style="margin-top:6px">Loading…</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" id="syncRun">Run sync now</button>
+      </div>
+      <div id="syncOut" class="muted"></div>
+    </div>
+    <div class="card">
+      <div class="l">Project bindings</div>
+      <div class="hint" style="margin-top:6px">Working-directory → SaaS project mappings. Memories written from a bound directory push to that central project when connected.</div>
+      <div class="list" id="bindingList"></div>
+    </div>
+    <div class="hint" style="margin-top:14px">Managed source connectors (SharePoint, Google Drive, Notion) are on the roadmap and not part of the local engine — this panel surfaces the built-in SaaS sync + bindings.</div>
   </section>
 
   <!-- LOGS -->
@@ -234,11 +308,13 @@ function esc(s) { return (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
-  ['status','memories','graph','context','logs','config'].forEach(t =>
+  ['status','memories','graph','context','duplicates','playground','sync','logs','config'].forEach(t =>
     $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
   if (b.dataset.tab === 'memories') loadMemories();
   if (b.dataset.tab === 'graph') loadGraph();
   if (b.dataset.tab === 'context') runContext();
+  if (b.dataset.tab === 'duplicates') { /* on demand */ }
+  if (b.dataset.tab === 'sync') loadSync();
   if (b.dataset.tab === 'logs') loadLogs();
   if (b.dataset.tab === 'config') loadConfig();
 });
@@ -251,17 +327,47 @@ async function poll() {
     $('#statusText').textContent = 'engine running';
     $('#verText').textContent = `${h.name} v${h.version} · ${h.backend}`;
     const st = await api('/stats');
-    const cards = [
-      ['total', st.total], ['indexed', st.withEmbedding], ['un-indexed', st.withoutEmbedding],
-      ...Object.entries(st.byScope || {}).map(([k, v]) => [k, v]),
-    ];
-    $('#statCards').innerHTML = cards.map(([l, n]) =>
-      `<div class="card"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`).join('');
+    $('#statCards').innerHTML = [
+      ['memories', st.total], ['indexed', st.withEmbedding],
+      ['un-indexed', st.withoutEmbedding], ['behavior patterns', st.patternCount],
+    ].map(([l, n]) => `<div class="card"><div class="n">${n}</div><div class="l">${esc(l)}</div></div>`).join('');
+    renderBars('#barsScope', st.byScope); renderBars('#barsType', st.byType); renderBars('#barsStatus', st.byStatus);
+    const cov = st.total ? Math.round(st.withEmbedding / st.total * 100) : 0;
+    $('#covFill').style.width = cov + '%';
+    $('#covText').textContent = `${st.withEmbedding} of ${st.total} memories indexed (${cov}%)`;
   } catch (e) {
     $('#statusDot').className = 'dot err';
     $('#statusText').textContent = 'engine unreachable';
   }
 }
+function renderBars(sel, obj) {
+  const entries = Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
+  const max = Math.max(1, ...entries.map(e => e[1]));
+  $(sel).innerHTML = entries.length ? entries.map(([k, v]) =>
+    `<div class="bar"><span class="k" title="${esc(k)}">${esc(k)}</span>
+      <span class="t"><span style="width:${Math.round(v / max * 100)}%"></span></span>
+      <span class="v">${v}</span></div>`).join('') : '<span class="muted">none</span>';
+}
+// ---- budget ----
+async function loadBudget() {
+  try {
+    const b = await api('/budget');
+    const cap = b.capUsd != null ? `$${b.capUsd.toFixed(2)}` : 'no cap';
+    $('#budgetBody').innerHTML = `Spent <b>$${(b.spentUsd || 0).toFixed(2)}</b> · cap <b>${cap}</b>`
+      + `<div class="hint" style="margin:4px 0 0">period since ${esc((b.periodStart || '').slice(0,10))}</div>`;
+    if (b.capUsd != null) $('#capUsd').value = b.capUsd;
+  } catch (e) { $('#budgetBody').textContent = 'Budget unavailable: ' + e.message; }
+}
+$('#saveCap').onclick = async () => {
+  const v = parseFloat($('#capUsd').value);
+  if (isNaN(v)) { toast('Enter a dollar amount', 'err'); return; }
+  try { await api('/budget', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ capUsd: v }) });
+    toast('Cap set', 'ok'); loadBudget(); } catch (e) { toast(e.message, 'err'); }
+};
+$('#clearCap').onclick = async () => {
+  try { await api('/budget', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ capUsd: null }) });
+    $('#capUsd').value = ''; toast('Cap cleared', 'ok'); loadBudget(); } catch (e) { toast(e.message, 'err'); }
+};
 
 // ---- memories ----
 async function loadMemories() {
@@ -318,22 +424,91 @@ $('#searchBtn').onclick = loadMemories;
 $('#refreshMem').onclick = loadMemories;
 $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') loadMemories(); });
 
-// ---- consolidate ----
-async function runConsolidate(dryRun) {
-  const threshold = parseFloat($('#consThreshold').value) || 0.95;
+// ---- duplicates review inbox ----
+let dupPairs = [];
+async function findDuplicates() {
+  const threshold = parseFloat($('#dupThreshold').value) || 0.92;
+  $('#dupStat').textContent = 'Scanning…';
+  $('#dupList').innerHTML = '';
   try {
-    const r = await api('/consolidate', { method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ threshold, dryRun }) });
-    const via = r.semantic ? 'cosine embeddings' : 'exact text';
-    $('#consOut').innerHTML = `Scanned <b>${r.scanned}</b>, ${dryRun ? 'would collapse' : 'collapsed'} `
-      + `<b>${r.collapsed}</b> duplicate(s) at ≥${r.threshold} via ${via}.`;
-    toast(dryRun ? 'Preview complete' : `Collapsed ${r.collapsed}`, 'ok');
-    if (!dryRun) poll();
-  } catch (e) { toast('Consolidate failed: ' + e.message, 'err'); }
+    const r = await api('/consolidate', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threshold, dryRun: true }) });
+    dupPairs = r.collapses || [];
+    $('#dupStat').innerHTML = `scanned <b>${r.scanned}</b> · <b>${dupPairs.length}</b> duplicate pair(s) via ${r.semantic ? 'cosine' : 'exact text'}`;
+    if (!dupPairs.length) { $('#dupList').innerHTML = '<div class="empty">No duplicates at this threshold.</div>'; return; }
+    const ids = [...new Set(dupPairs.flatMap(p => [p.loserId, p.survivorId]))];
+    const content = {};
+    await Promise.all(ids.map(id => api('/memory/' + encodeURIComponent(id))
+      .then(m => content[id] = m.content).catch(() => content[id] = '(unavailable)')));
+    $('#dupList').innerHTML = dupPairs.map((p, i) => `
+      <div class="item" data-i="${i}">
+        <div class="meta"><span class="tag">similarity ${(p.similarity||0).toFixed(3)}</span></div>
+        <div><span class="muted">keep →</span> ${esc(content[p.survivorId] || p.survivorId)}</div>
+        <div style="margin-top:4px"><span class="muted">merge →</span> ${esc(content[p.loserId] || p.loserId)}</div>
+        <div class="actions"><button class="btn danger" data-act="merge">Merge this pair</button></div>
+      </div>`).join('');
+  } catch (e) { $('#dupStat').textContent = 'Failed: ' + e.message; }
 }
-$('#consPreview').onclick = () => runConsolidate(true);
-$('#consApply').onclick = () => { if (confirm('Apply consolidation now?')) runConsolidate(false); };
+$('#dupFind').onclick = findDuplicates;
+$('#dupList').onclick = async (ev) => {
+  const btn = ev.target.closest('button[data-act=merge]'); if (!btn) return;
+  const p = dupPairs[+ev.target.closest('.item').dataset.i];
+  try {
+    await api('/memory/' + encodeURIComponent(p.loserId) + '/supersede', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ by_id: p.survivorId }) });
+    toast('Merged', 'ok'); ev.target.closest('.item').remove(); poll();
+  } catch (e) { toast('Merge failed: ' + e.message, 'err'); }
+};
+$('#dupMergeAll').onclick = async () => {
+  const threshold = parseFloat($('#dupThreshold').value) || 0.92;
+  if (!confirm('Merge ALL duplicates at this threshold? (non-destructive — supersede)')) return;
+  try {
+    const r = await api('/consolidate', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threshold, dryRun: false }) });
+    toast(`Merged ${r.collapsed}`, 'ok'); findDuplicates(); poll();
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+// ---- playground ----
+async function pgRun(q, k, listSel, metaSel) {
+  let url = '/memory?limit=' + k;
+  if (q) url += '&query=' + encodeURIComponent(q);
+  try {
+    const rows = await api(url);
+    $(metaSel).textContent = `${rows.length} result(s), k=${k}`;
+    $(listSel).innerHTML = rows.length ? rows.map((m, i) => `
+      <div class="item"><div class="meta"><span class="tag">#${i + 1}</span><span class="tag scope">${esc(m.scope)}</span></div>
+        <div class="content">${esc(m.content)}</div></div>`).join('') : '<div class="empty">no results</div>';
+  } catch (e) { $(metaSel).textContent = 'failed: ' + e.message; }
+}
+$('#pgRun').onclick = () => {
+  pgRun($('#pgqA').value.trim(), $('#pgkA').value, '#pgA', '#pgmetaA');
+  pgRun($('#pgqB').value.trim(), $('#pgkB').value, '#pgB', '#pgmetaB');
+};
+
+// ---- sync + bindings ----
+async function loadSync() {
+  try {
+    const s = await api('/sync');
+    $('#syncBody').innerHTML = s.connected
+      ? `Mode: <b>connected</b> · ${esc(s.url || '')} · platform <b>${esc(s.platformId || '')}</b> · every ${esc(s.intervalSeconds)}s`
+      : `Mode: <b>local-only</b> — not connected to a SaaS. Configure with <code>memmesh config set-sync</code>.`;
+    $('#syncRun').disabled = !s.connected;
+    const b = await api('/bindings');
+    $('#bindingList').innerHTML = (b && b.length) ? b.map(x => `
+      <div class="item"><div class="content">${esc(x.cwd)}</div>
+        <div class="prov"><span>platform: ${esc(x.platformId ?? x.platform_id)}</span><span>project: ${esc(x.projectId ?? x.project_id)}</span></div></div>`).join('')
+      : '<div class="empty">No project bindings.</div>';
+  } catch (e) { $('#syncBody').textContent = 'Sync info unavailable: ' + e.message; }
+}
+$('#syncRun').onclick = async () => {
+  $('#syncOut').textContent = 'Running sync cycle…';
+  try {
+    const r = await api('/sync/run', { method: 'POST' });
+    $('#syncOut').textContent = 'Complete: ' + JSON.stringify(r);
+    toast('Sync complete', 'ok');
+  } catch (e) { $('#syncOut').textContent = 'Failed: ' + e.message; toast('Sync failed', 'err'); }
+};
 
 // ---- logs ----
 let logTimer = null;
@@ -573,6 +748,7 @@ $('#ctxCopy').onclick = () => { navigator.clipboard.writeText($('#ctxBlock').tex
 
 // ---- boot ----
 poll();
+loadBudget();
 setInterval(poll, 5000);
 setInterval(tickLogs, 2000);
 </script>

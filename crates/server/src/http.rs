@@ -655,6 +655,94 @@ async fn rebuild_graph<S: Storage>(State(s): State<AppState<S>>) -> axum::respon
     .into_response()
 }
 
+// ── /budget (LLM cost transparency) ─────────────────────────
+
+#[derive(Deserialize)]
+struct BudgetQuery {
+    platform: Option<String>,
+}
+
+async fn get_budget<S: Storage>(
+    State(s): State<AppState<S>>,
+    Query(q): Query<BudgetQuery>,
+) -> axum::response::Response {
+    let platform = q.platform.unwrap_or_else(|| "local".to_string());
+    match memory_storage::budget::current(s.storage.as_ref(), &platform).await {
+        Ok(st) => Json(json!({
+            "platform": platform,
+            "periodStart": st.period_start.to_rfc3339(),
+            "spentUsd": st.spent_cents as f64 / 100.0,
+            "capUsd": st.cap_cents.map(|c| c as f64 / 100.0),
+        }))
+        .into_response(),
+        Err(e) => err("budget", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetBudgetBody {
+    platform: Option<String>,
+    /// Cap in USD. `null` clears the cap (unlimited).
+    #[serde(rename = "capUsd")]
+    cap_usd: Option<f64>,
+}
+
+async fn put_budget<S: Storage>(
+    State(s): State<AppState<S>>,
+    Json(b): Json<SetBudgetBody>,
+) -> axum::response::Response {
+    let platform = b.platform.unwrap_or_else(|| "local".to_string());
+    let cents = b.cap_usd.map(|u| (u * 100.0).round() as i64);
+    match memory_storage::budget::set_cap(s.storage.as_ref(), &platform, cents).await {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(e) => err("budget", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+// ── /sync + /bindings (SaaS sync surface) ───────────────────
+
+async fn get_sync() -> axum::response::Response {
+    let cfg = Config::load_or_default();
+    let connected = cfg.is_saas_configured();
+    Json(json!({
+        "connected": connected,
+        "mode": if connected { "saas-connected" } else { "local-only" },
+        "url": cfg.sync.as_ref().map(|s| s.url.clone()),
+        "platformId": cfg.sync.as_ref().map(|s| s.platform_id.clone()),
+        "intervalSeconds": cfg.sync.as_ref().map(|s| s.interval_seconds),
+    }))
+    .into_response()
+}
+
+async fn run_sync<S: Storage>(State(s): State<AppState<S>>) -> axum::response::Response {
+    let cfg = Config::load_or_default();
+    let sync_cfg = match cfg.sync.clone() {
+        Some(c) if cfg.is_saas_configured() => c,
+        _ => {
+            return err(
+                "not_connected",
+                StatusCode::BAD_REQUEST,
+                "sync is not configured — running in local-only mode",
+            )
+        }
+    };
+    let client = match memory_sync::SyncClient::new(sync_cfg.url.clone(), sync_cfg.token.clone()) {
+        Ok(c) => c,
+        Err(e) => return err("sync_client", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    match memory_sync::run_cycle(s.storage.as_ref(), &client, &sync_cfg).await {
+        Ok(stats) => Json(stats).into_response(),
+        Err(e) => err("sync_run", StatusCode::BAD_GATEWAY, e.to_string()),
+    }
+}
+
+async fn get_bindings<S: Storage>(State(s): State<AppState<S>>) -> axum::response::Response {
+    match s.storage.list_bindings().await {
+        Ok(bs) => Json(bs).into_response(),
+        Err(e) => map_err(e),
+    }
+}
+
 // ── Public entrypoint ───────────────────────────────────────
 
 /// Build the HTTP router. Caller owns binding + serving so the same router
@@ -675,6 +763,10 @@ pub fn router<S: Storage>(storage: Arc<S>) -> Router {
         .route("/config", get(get_config).put(put_config))
         .route("/graph", get(get_graph))
         .route("/graph/rebuild", post(rebuild_graph))
+        .route("/budget", get(get_budget).put(put_budget))
+        .route("/sync", get(get_sync))
+        .route("/sync/run", post(run_sync))
+        .route("/bindings", get(get_bindings))
         .route("/database", get(get_database).put(put_database))
         .route("/database/test", post(test_database))
         .route("/database/copy", post(copy_database))
