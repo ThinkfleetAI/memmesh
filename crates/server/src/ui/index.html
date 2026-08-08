@@ -77,6 +77,20 @@
   label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   .hidden { display: none; }
   .hint { font-size: 12px; color: var(--muted); margin: 4px 0 12px; }
+  .hint code { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .graphwrap { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; height: 62vh; overflow: hidden; }
+  #graphSvg { width: 100%; height: 100%; display: block; cursor: grab; }
+  .gedge { stroke: var(--border); stroke-width: 1.5; }
+  .gedge.hi { stroke: var(--accent); stroke-width: 2.5; }
+  .gedge-label { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
+  .gnode circle { stroke: var(--panel); stroke-width: 2; cursor: pointer; transition: r .1s; }
+  .gnode text { fill: var(--fg); font-size: 11px; pointer-events: none; }
+  .gnode.dim { opacity: .25; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .prov { font-size: 11px; color: var(--muted); margin-top: 8px; font-family: var(--mono); display: flex; gap: 10px; flex-wrap: wrap; }
+  .prov .sup { color: var(--warn); }
 </style>
 </head>
 <body>
@@ -89,6 +103,8 @@
 <nav>
   <button data-tab="status" class="active">Status</button>
   <button data-tab="memories">Memories</button>
+  <button data-tab="graph">Graph</button>
+  <button data-tab="context">Context</button>
   <button data-tab="logs">Logs</button>
   <button data-tab="config">Config</button>
 </nav>
@@ -123,6 +139,32 @@
       <button class="btn" id="refreshMem">Refresh</button>
     </div>
     <div class="list" id="memList"></div>
+  </section>
+
+  <!-- GRAPH -->
+  <section id="tab-graph" class="hidden">
+    <div class="row">
+      <span class="muted" id="graphStats">Loading graph…</span>
+      <span class="spacer"></span>
+      <div id="graphLegend" class="legend"></div>
+      <button class="btn" id="graphRefresh">Refresh</button>
+      <button class="btn primary" id="graphRebuild">Rebuild from memories</button>
+    </div>
+    <div class="hint">A knowledge graph auto-built from your memories — entities (people, orgs…) and the typed relationships between them, extracted with zero LLM calls. Hover a node to highlight its links.</div>
+    <div id="graphWrap" class="graphwrap"><svg id="graphSvg"></svg></div>
+    <div id="graphEmpty" class="empty hidden">No entities yet. Observe memories that mention people, emails, orgs, or relationships (“X works at Y”), then <b>Rebuild from memories</b>.</div>
+  </section>
+
+  <!-- CONTEXT -->
+  <section id="tab-context" class="hidden">
+    <div class="row">
+      <input id="ctxQuery" type="text" placeholder="Query the agent would run (blank = most recent)" />
+      <input id="ctxProject" type="text" placeholder="project (optional)" style="max-width:200px" />
+      <button class="btn primary" id="ctxRun">Preview</button>
+    </div>
+    <div class="hint">Exactly the memory block that gets injected into an AI tool's context for this query — the same <code>claude-context</code> format the SessionStart hook uses. This is “what the AI actually sees.”</div>
+    <div class="row"><span class="muted" id="ctxMeta"></span><span class="spacer"></span><button class="btn" id="ctxCopy">Copy</button></div>
+    <pre class="logs" id="ctxBlock" style="max-height:58vh"></pre>
   </section>
 
   <!-- LOGS -->
@@ -192,9 +234,11 @@ function esc(s) { return (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
-  ['status','memories','logs','config'].forEach(t =>
+  ['status','memories','graph','context','logs','config'].forEach(t =>
     $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
   if (b.dataset.tab === 'memories') loadMemories();
+  if (b.dataset.tab === 'graph') loadGraph();
+  if (b.dataset.tab === 'context') runContext();
   if (b.dataset.tab === 'logs') loadLogs();
   if (b.dataset.tab === 'config') loadConfig();
 });
@@ -238,6 +282,13 @@ async function loadMemories() {
           <span class="id">${esc(m.id)}</span>
         </div>
         <div class="content">${esc(m.content)}</div>
+        <div class="prov">
+          <span>source: ${esc(m.source || '—')}</span>
+          <span>confidence: ${m.confidence != null ? m.confidence.toFixed(2) : '—'}</span>
+          <span>learned: ${esc((m.created || '').slice(0, 10))}</span>
+          ${m.validTo ? `<span>valid→ ${esc(m.validTo.slice(0,10))}</span>` : ''}
+          ${m.supersededById ? `<span class="sup">superseded ↦ ${esc(m.supersededById)}</span>` : ''}
+        </div>
         <div class="actions">
           <button class="btn" data-act="supersede">Supersede…</button>
           <button class="btn danger" data-act="delete">Delete</button>
@@ -383,6 +434,142 @@ $('#saveConfig').onclick = async () => {
     toast('Config saved — restart the engine to apply', 'ok');
   } catch (e) { toast(e.message, 'err'); }
 };
+
+// ---- graph ----
+const NODE_COLORS = { person: '#5b8cff', org: '#37c98a', product: '#e5b567',
+  location: '#ef6b6b', concept: '#b58cff', event: '#4bd6d6', document: '#9aa4b2', other: '#8b93a3' };
+function nodeColor(t) { return NODE_COLORS[t] || NODE_COLORS.other; }
+
+async function loadGraph() {
+  $('#graphStats').textContent = 'Loading graph…';
+  try {
+    const g = await api('/graph');
+    renderGraph(g);
+  } catch (e) { $('#graphStats').textContent = 'Graph load failed: ' + e.message; }
+}
+function renderGraph(g) {
+  const svg = $('#graphSvg');
+  const nodes = g.entities.map(e => ({ ...e }));
+  const idset = new Set(nodes.map(n => n.id));
+  // Only edges between two known entities get drawn as links; literal-object
+  // edges are summarized on the node via title.
+  const links = g.edges.filter(e => e.object && idset.has(e.subject) && idset.has(e.object))
+    .map(e => ({ s: e.subject, t: e.object, p: e.predicate }));
+  $('#graphStats').innerHTML = `<b>${nodes.length}</b> entities · <b>${g.edges.length}</b> relationships`;
+  // legend
+  const types = [...new Set(nodes.map(n => n.type))];
+  $('#graphLegend').innerHTML = types.map(t =>
+    `<span><i style="background:${nodeColor(t)}"></i>${esc(t)}</span>`).join('');
+
+  $('#graphEmpty').classList.toggle('hidden', nodes.length > 0);
+  $('#graphWrap').classList.toggle('hidden', nodes.length === 0);
+  if (!nodes.length) { svg.innerHTML = ''; return; }
+
+  const W = svg.clientWidth || 900, H = svg.clientHeight || 500;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  // seed positions on a circle (deterministic, no Math.random dependency)
+  nodes.forEach((n, i) => {
+    const a = (i / nodes.length) * Math.PI * 2;
+    n.x = W / 2 + Math.cos(a) * Math.min(W, H) * 0.32;
+    n.y = H / 2 + Math.sin(a) * Math.min(W, H) * 0.32;
+  });
+  // simple force sim: repulsion + spring on links + centering
+  for (let iter = 0; iter < 220; iter++) {
+    for (let i = 0; i < nodes.length; i++) {
+      let fx = 0, fy = 0;
+      for (let j = 0; j < nodes.length; j++) {
+        if (i === j) continue;
+        let dx = nodes[i].x - nodes[j].x, dy = nodes[i].y - nodes[j].y;
+        let d2 = dx * dx + dy * dy || 1;
+        const rep = 9000 / d2;
+        fx += dx * rep; fy += dy * rep;
+      }
+      fx += (W / 2 - nodes[i].x) * 0.012; fy += (H / 2 - nodes[i].y) * 0.012;
+      nodes[i].vx = ((nodes[i].vx || 0) + fx) * 0.82;
+      nodes[i].vy = ((nodes[i].vy || 0) + fy) * 0.82;
+    }
+    links.forEach(l => {
+      const a = byId[l.s], b = byId[l.t];
+      let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+      const k = (d - 120) * 0.02;
+      const ux = dx / d * k, uy = dy / d * k;
+      a.vx += ux; a.vy += uy; b.vx -= ux; b.vy -= uy;
+    });
+    nodes.forEach(n => {
+      n.x = Math.max(30, Math.min(W - 30, n.x + n.vx));
+      n.y = Math.max(24, Math.min(H - 24, n.y + n.vy));
+    });
+  }
+  const deg = {}; links.forEach(l => { deg[l.s] = (deg[l.s]||0)+1; deg[l.t] = (deg[l.t]||0)+1; });
+  const edgeSvg = links.map((l, i) => {
+    const a = byId[l.s], b = byId[l.t];
+    return `<g data-s="${esc(l.s)}" data-t="${esc(l.t)}">
+      <line class="gedge" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"></line>
+      <text class="gedge-label" x="${(a.x+b.x)/2}" y="${(a.y+b.y)/2 - 3}">${esc(l.p)}</text></g>`;
+  }).join('');
+  const nodeSvg = nodes.map(n => {
+    const r = 6 + Math.min(10, (deg[n.id] || 0) * 2);
+    return `<g class="gnode" data-id="${esc(n.id)}" transform="translate(${n.x},${n.y})">
+      <circle r="${r}" fill="${nodeColor(n.type)}"><title>${esc(n.name)} (${esc(n.type)})</title></circle>
+      <text x="${r + 4}" y="4">${esc(n.name.length > 22 ? n.name.slice(0,22)+'…' : n.name)}</text></g>`;
+  }).join('');
+  svg.innerHTML = edgeSvg + nodeSvg;
+  // hover highlight
+  svg.querySelectorAll('.gnode').forEach(g => {
+    g.onmouseenter = () => {
+      const id = g.dataset.id;
+      const nbrs = new Set([id]);
+      svg.querySelectorAll('.gedge').forEach((ln, i) => {
+        const grp = ln.parentNode;
+        const on = grp.dataset.s === id || grp.dataset.t === id;
+        ln.classList.toggle('hi', on);
+        if (on) { nbrs.add(grp.dataset.s); nbrs.add(grp.dataset.t); }
+      });
+      svg.querySelectorAll('.gnode').forEach(n => n.classList.toggle('dim', !nbrs.has(n.dataset.id)));
+    };
+    g.onmouseleave = () => {
+      svg.querySelectorAll('.gedge').forEach(ln => ln.classList.remove('hi'));
+      svg.querySelectorAll('.gnode').forEach(n => n.classList.remove('dim'));
+    };
+  });
+}
+$('#graphRefresh').onclick = loadGraph;
+$('#graphRebuild').onclick = async () => {
+  $('#graphStats').textContent = 'Rebuilding…';
+  try {
+    const r = await api('/graph/rebuild', { method: 'POST' });
+    toast(`Rebuilt: ${r.entitiesResolved} entities, ${r.edgesWritten} edges from ${r.scanned} memories`, 'ok');
+    loadGraph();
+  } catch (e) { toast('Rebuild failed: ' + e.message, 'err'); }
+};
+
+// ---- context preview ----
+function buildContextBlock(rows, project) {
+  const hp = project ? ` project="${project}"` : '';
+  if (!rows.length) return `<persistent-memory${hp}>\n  (no memories yet for this scope)\n</persistent-memory>`;
+  const lines = rows.map(r => {
+    let c = (r.content || '').slice(0, 280).replace(/[\r\n]+/g, ' ');
+    if ((r.content || '').length > 280) c += '…';
+    return `  - (${r.scope}/${r.type}) ${c}`;
+  });
+  return `<persistent-memory${hp} count="${rows.length}">\n${lines.join('\n')}\n</persistent-memory>`;
+}
+async function runContext() {
+  const q = $('#ctxQuery').value.trim();
+  const project = $('#ctxProject').value.trim();
+  let url = '/memory?limit=30';
+  if (q) url += '&query=' + encodeURIComponent(q);
+  if (project) url += '&project=' + encodeURIComponent(project);
+  try {
+    const rows = await api(url);
+    $('#ctxBlock').textContent = buildContextBlock(rows, project);
+    $('#ctxMeta').textContent = `${rows.length} memories · ${$('#ctxBlock').textContent.length} chars injected`;
+  } catch (e) { $('#ctxBlock').textContent = 'Failed: ' + e.message; }
+}
+$('#ctxRun').onclick = runContext;
+$('#ctxQuery').addEventListener('keydown', e => { if (e.key === 'Enter') runContext(); });
+$('#ctxCopy').onclick = () => { navigator.clipboard.writeText($('#ctxBlock').textContent); toast('Copied', 'ok'); };
 
 // ---- boot ----
 poll();

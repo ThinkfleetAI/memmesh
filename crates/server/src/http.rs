@@ -41,8 +41,9 @@ use memory_core::{
     MemoryItem, MemoryScope,
 };
 use memory_storage::{
+    graph_extractor::{extract_and_wire, GraphContext},
     observe::{ObserveRequest, ObserveResponse},
-    MemoryFilter, MemoryQuery, Storage, StorageError,
+    EdgeFilter, EntityFilter, MemoryFilter, MemoryQuery, Storage, StorageError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -546,6 +547,114 @@ async fn put_database(Json(b): Json<SetDbBody>) -> axum::response::Response {
     }
 }
 
+// ── /graph (knowledge-graph explorer) ───────────────────────
+
+/// Return the full entity + edge set for the graph view. Entities carry
+/// canonical name + type; edges carry subject/predicate/object (object is
+/// either another entity id or a literal string).
+async fn get_graph<S: Storage>(State(s): State<AppState<S>>) -> axum::response::Response {
+    let entities = match s.storage.query_entities(&EntityFilter::default()).await {
+        Ok(e) => e,
+        Err(e) => return map_err(e),
+    };
+    let edges = match s.storage.query_edges(&EdgeFilter::default()).await {
+        Ok(e) => e,
+        Err(e) => return map_err(e),
+    };
+    // Collapse duplicate edges (same subject→predicate→object) for display —
+    // the extractor can write the same relationship more than once (e.g. after
+    // a graph rebuild re-scans already-ingested memories), and the graph view
+    // wants one line per distinct relationship.
+    let mut seen = std::collections::HashSet::new();
+    let edges_json: Vec<_> = edges
+        .iter()
+        .filter(|e| {
+            let key = format!(
+                "{}|{}|{}",
+                e.subject_id,
+                e.predicate,
+                e.object_id.as_deref().or(e.object_literal.as_deref()).unwrap_or("")
+            );
+            seen.insert(key)
+        })
+        .map(|e| json!({
+            "id": e.id,
+            "subject": e.subject_id,
+            "predicate": e.predicate,
+            "object": e.object_id,
+            "objectLiteral": e.object_literal,
+        }))
+        .collect();
+    Json(json!({
+        "entities": entities.iter().map(|e| json!({
+            "id": e.id,
+            "name": e.canonical_name,
+            "type": e.type_,
+            "aliases": e.aliases,
+        })).collect::<Vec<_>>(),
+        "edges": edges_json,
+    }))
+    .into_response()
+}
+
+/// Backfill the graph by re-running the zero-LLM extractor over every stored
+/// memory. Idempotent — the entity resolver dedupes and edges upsert — so
+/// this is safe to run repeatedly (e.g. after importing memories that were
+/// saved before graph extraction existed).
+async fn rebuild_graph<S: Storage>(State(s): State<AppState<S>>) -> axum::response::Response {
+    let page: u32 = 500;
+    let mut offset: u32 = 0;
+    let (mut scanned, mut ents, mut edges) = (0u64, 0u64, 0u64);
+    loop {
+        let rows = match s
+            .storage
+            .query(&MemoryQuery {
+                filter: MemoryFilter::default(),
+                limit: Some(page),
+                offset: Some(offset),
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return map_err(e),
+        };
+        if rows.is_empty() {
+            break;
+        }
+        let n = rows.len() as u32;
+        for item in &rows {
+            let ctx = GraphContext {
+                platform_id: item.platform_id.clone(),
+                project_id: item.project_id.clone(),
+                scope: item.scope,
+                source_memory_id: item.id.clone(),
+            };
+            if let Ok(st) = extract_and_wire(s.storage.as_ref(), &item.content, &ctx).await {
+                ents += st.entities_resolved as u64;
+                edges += st.edges_written as u64;
+            }
+            scanned += 1;
+        }
+        if n < page {
+            break;
+        }
+        offset += page;
+    }
+    let total_entities = s
+        .storage
+        .query_entities(&EntityFilter::default())
+        .await
+        .map(|v| v.len())
+        .unwrap_or(0);
+    Json(json!({
+        "scanned": scanned,
+        "entitiesResolved": ents,
+        "edgesWritten": edges,
+        "totalEntities": total_entities,
+    }))
+    .into_response()
+}
+
 // ── Public entrypoint ───────────────────────────────────────
 
 /// Build the HTTP router. Caller owns binding + serving so the same router
@@ -564,6 +673,8 @@ pub fn router<S: Storage>(storage: Arc<S>) -> Router {
         .route("/observe", post(observe_handler))
         .route("/consolidate", post(consolidate_handler))
         .route("/config", get(get_config).put(put_config))
+        .route("/graph", get(get_graph))
+        .route("/graph/rebuild", post(rebuild_graph))
         .route("/database", get(get_database).put(put_database))
         .route("/database/test", post(test_database))
         .route("/database/copy", post(copy_database))
