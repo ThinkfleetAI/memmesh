@@ -123,6 +123,22 @@ pub async fn run_stdio<S: Storage>(storage: Arc<S>, license: License) -> Result<
     Ok(())
 }
 
+/// Handle a single JSON-RPC message (raw string) and return the serialized
+/// response value, or `None` for notifications (which get no response). Shared
+/// by the stdio loop and the Streamable-HTTP transport in `memory-server`.
+pub async fn handle_message<S: Storage>(
+    message: &str,
+    storage: &S,
+    license: &License,
+) -> Option<serde_json::Value> {
+    handle_line(message, storage, license).await.map(|resp| {
+        serde_json::to_value(resp).unwrap_or_else(|e| {
+            json!({ "jsonrpc": "2.0", "id": null,
+                    "error": { "code": -32603, "message": e.to_string() } })
+        })
+    })
+}
+
 // Both early-return blocks below check id-presence and need readable control
 // flow with side effects (tracing). The clippy `?` rewrite hides intent.
 #[allow(clippy::question_mark)]
@@ -165,17 +181,30 @@ async fn handle_line<S: Storage>(
     }
 
     let response = match req.method.as_str() {
-        "initialize" => JsonRpcResponse::ok(
-            req.id,
-            json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {} },
-                "serverInfo": {
-                    "name": SERVER_NAME,
-                    "version": SERVER_VERSION,
-                }
-            }),
-        ),
+        "initialize" => {
+            // Echo the client's requested protocol version when present. stdio
+            // clients (Claude Code) send 2024-11-05; Streamable-HTTP clients
+            // (ChatGPT / Claude.ai connectors) negotiate newer revisions
+            // (2025-03-26 / 2025-06-18). Our tool surface is compatible across
+            // all of them, so echoing avoids a version-mismatch rejection.
+            let negotiated = req
+                .params
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or(PROTOCOL_VERSION)
+                .to_string();
+            JsonRpcResponse::ok(
+                req.id,
+                json!({
+                    "protocolVersion": negotiated,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": {
+                        "name": SERVER_NAME,
+                        "version": SERVER_VERSION,
+                    }
+                }),
+            )
+        }
 
         "tools/list" => JsonRpcResponse::ok(req.id, json!({ "tools": tool_definitions() })),
 

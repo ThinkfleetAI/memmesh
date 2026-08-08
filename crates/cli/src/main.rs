@@ -218,6 +218,21 @@ enum Cmd {
         no_open: bool,
     },
 
+    /// Start a REMOTE MCP server over Streamable HTTP for web chats
+    /// (ChatGPT + Claude.ai custom connectors), which can't use a local
+    /// stdio server. Unlike `mcp` (stdio) and `console` (loopback, no auth),
+    /// this is meant to be exposed publicly via a tunnel, so it REQUIRES a
+    /// bearer token. Pass --token or set MEMMESH_MCP_TOKEN; if neither is
+    /// set, a random token is generated and printed.
+    ServeMcp {
+        /// Address to bind. Default 127.0.0.1:7899 (put a tunnel in front).
+        #[arg(long, default_value = "127.0.0.1:7899")]
+        http: String,
+        /// Bearer token clients must send. Auto-generated if omitted.
+        #[arg(long, env = "MEMMESH_MCP_TOKEN")]
+        token: Option<String>,
+    },
+
     /// Manage the agent teaching skill (markdown that tells the AI when
     /// and how to use the memory tools).
     Skill {
@@ -786,6 +801,28 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
             println!();
             tracing::info!(db = %cli.db, addr = %http, "starting web console");
             memory_server::serve_http(store, &http).await?;
+        }
+
+        Cmd::ServeMcp { http, token } => {
+            let token = token.unwrap_or_else(|| {
+                uuid::Uuid::new_v4().to_string().replace('-', "")
+            });
+            let url = format!("http://{http}/mcp");
+            println!();
+            println!("  MemMesh remote MCP (Streamable HTTP)");
+            println!("  ────────────────────────────────────");
+            println!("  engine : {}", cli.db);
+            println!("  url    : {url}");
+            println!("  token  : {token}");
+            println!();
+            println!("  Expose it publicly with a tunnel, e.g.:");
+            println!("    cloudflared tunnel --url http://{http}");
+            println!("  then register the resulting https URL + '/mcp' as a custom");
+            println!("  connector in ChatGPT / Claude.ai, with header:");
+            println!("    Authorization: Bearer {token}");
+            println!();
+            tracing::info!(db = %cli.db, addr = %http, "starting remote MCP server");
+            memory_server::serve_mcp_http(store, license, &http, token).await?;
         }
 
         Cmd::Sync { skip_token_check } => {
