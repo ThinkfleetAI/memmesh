@@ -69,6 +69,13 @@ pub fn extract(text: &str, ctx: &ObserveContext) -> Vec<ExtractedMemory> {
 
     let mut out = Vec::new();
     for line in segment(text) {
+        // SAFETY NET: never persist a line that looks like it carries a live
+        // credential. Secrets belong in the encrypted vault (entered by the
+        // user out-of-band), never in the plaintext memory store — and never
+        // in the context we later inject back. Drop the whole line.
+        if contains_secret(&line) {
+            continue;
+        }
         if let Some(m) = extract_line(&line, ctx) {
             out.push(m);
         }
@@ -82,13 +89,41 @@ pub fn extract(text: &str, ctx: &ObserveContext) -> Vec<ExtractedMemory> {
     // (third-person, questions aside, arbitrary facts) matches nothing, so
     // without this the store stays empty. Hosted LLM extraction refines these
     // into typed facts; locally we at least never lose them.
-    if out.is_empty() {
+    if out.is_empty() && !contains_secret(text) {
         if let Some(m) = fallback_observation(text) {
             out.push(m);
         }
     }
 
     out
+}
+
+/// Regexes for common live credentials. Precision-first: these match
+/// high-signal token shapes and `key = value` secret assignments, not every
+/// mention of the word "password". Used only as a safety net so a pasted
+/// credential never lands in the plaintext memory store.
+static SECRET_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    [
+        r"AKIA[0-9A-Z]{16}",                                  // AWS access key id
+        r"ASIA[0-9A-Z]{16}",                                  // AWS temp key id
+        r"sk-ant-[A-Za-z0-9_\-]{20,}",                        // Anthropic
+        r"sk-[A-Za-z0-9]{20,}",                               // OpenAI-style
+        r"gh[opsu]_[A-Za-z0-9]{30,}",                         // GitHub tokens
+        r"xox[baprs]-[A-Za-z0-9-]{10,}",                      // Slack
+        r"AIza[0-9A-Za-z\-_]{35}",                            // Google API key
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",               // PEM private key
+        r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}", // JWT
+        r"(?i)(password|passwd|pwd|api[_-]?key|secret|token|bearer)\s*[:=]\s*\S{6,}",
+        r"(?i)(postgres(ql)?|mysql|mongodb(\+srv)?|redis|amqp)://[^:\s/]+:[^@\s]+@", // DSN with creds
+    ]
+    .iter()
+    .map(|p| Regex::new(p).expect("invalid secret regex"))
+    .collect()
+});
+
+/// True if the text appears to contain a live credential.
+pub fn contains_secret(text: &str) -> bool {
+    SECRET_PATTERNS.iter().any(|re| re.is_match(text))
 }
 
 /// Keep substantive input that matched no structured rule as a raw
