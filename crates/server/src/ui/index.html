@@ -102,6 +102,8 @@
   .covbar { background: var(--panel-2); border-radius: 6px; height: 14px; overflow: hidden; }
   .covbar span { display: block; height: 100%; background: var(--ok); }
   .cov #covText { margin-top: 6px; }
+  .reveal-box { margin-top: 8px; }
+  .secret-val { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border: 1px dashed var(--warn); color: var(--fg); padding: 5px 9px; border-radius: 6px; word-break: break-all; user-select: all; display: inline-block; }
   .pg { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .pgcol .item { padding: 9px 11px; }
   @media (max-width: 720px) { .pg { grid-template-columns: 1fr; } }
@@ -831,7 +833,12 @@ async function loadVault() {
           ${s.last_used ? `<span class="id">used ${esc(s.last_used.slice(0,10))}</span>` : '<span class="id">never used</span>'}</div>
         ${s.description ? `<div class="content">${esc(s.description)}</div>` : ''}
         <div class="prov"><span>reference: {{memmesh:${esc(s.name)}}}</span></div>
-        <div class="actions"><button class="btn danger" data-act="del">Delete</button></div>
+        <div class="reveal-box hidden"></div>
+        <div class="actions">
+          <button class="btn" data-act="reveal">Reveal</button>
+          <button class="btn" data-act="copy">Copy</button>
+          <button class="btn danger" data-act="del">Delete</button>
+        </div>
       </div>`).join('');
   } catch (e) { toast('Vault load failed: ' + e.message, 'err'); }
 }
@@ -847,13 +854,44 @@ $('#vAdd').onclick = async () => {
 };
 $('#vRefresh').onclick = loadVault;
 $('#vaultList').onclick = async (ev) => {
-  const btn = ev.target.closest('button[data-act=del]'); if (!btn) return;
-  const name = ev.target.closest('.item').dataset.name;
-  if (!confirm(`Delete secret '${name}'?`)) return;
-  try { await api('/vault/' + encodeURIComponent(name), { method: 'DELETE' });
-    toast('Deleted', 'ok'); ev.target.closest('.item').remove(); }
-  catch (e) { toast('Delete failed: ' + e.message, 'err'); }
+  const btn = ev.target.closest('button[data-act]'); if (!btn) return;
+  const item = ev.target.closest('.item'); const name = item.dataset.name;
+  const act = btn.dataset.act;
+  if (act === 'del') {
+    if (!confirm(`Delete secret '${name}'?`)) return;
+    try { await api('/vault/' + encodeURIComponent(name), { method: 'DELETE' });
+      toast('Deleted', 'ok'); item.remove(); }
+    catch (e) { toast('Delete failed: ' + e.message, 'err'); }
+  } else if (act === 'reveal') {
+    const box = item.querySelector('.reveal-box');
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); btn.textContent = 'Reveal'; return; }
+    try {
+      const r = await api('/vault/' + encodeURIComponent(name) + '/reveal');
+      box.innerHTML = `<code class="secret-val">${esc(r.value)}</code>`;
+      box.classList.remove('hidden'); btn.textContent = 'Hide';
+    } catch (e) { toast('Reveal failed: ' + e.message, 'err'); }
+  } else if (act === 'copy') {
+    try {
+      const r = await api('/vault/' + encodeURIComponent(name) + '/reveal');
+      await navigator.clipboard.writeText(r.value); toast('Copied to clipboard', 'ok');
+    } catch (e) { toast('Copy failed: ' + e.message, 'err'); }
+  }
 };
+
+// ---- deep link: ?tab=vault&add=NAME&kind=K  (the AI credential prompt lands here) ----
+(function () {
+  const q = new URLSearchParams(location.search);
+  const tab = q.get('tab');
+  if (tab) {
+    const b = [...document.querySelectorAll('nav button')].find(x => x.dataset.tab === tab);
+    if (b) b.click();
+  }
+  if (q.get('add')) {
+    $('#vName').value = q.get('add');
+    if (q.get('kind')) $('#vKind').value = q.get('kind');
+    setTimeout(() => $('#vValue').focus(), 150);
+  }
+})();
 
 // ---- boot ----
 poll();

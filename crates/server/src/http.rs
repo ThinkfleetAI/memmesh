@@ -787,6 +787,22 @@ async fn add_vault(Json(b): Json<AddSecretBody>) -> axum::response::Response {
     }
 }
 
+/// Reveal a secret's plaintext to the **human** at the loopback console (for
+/// copy/paste of their own credential). Deliberately NOT exposed to the AI —
+/// there is no MCP equivalent; the model only ever gets scrubbed `secret_run`
+/// output.
+async fn reveal_vault(Path(name): Path<String>) -> axum::response::Response {
+    let vault = match open_vault_or_err().await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match vault.reveal(&name).await {
+        Ok(Some(value)) => Json(json!({ "name": name, "value": value })).into_response(),
+        Ok(None) => err("not_found", StatusCode::NOT_FOUND, name),
+        Err(e) => err("vault_reveal", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 async fn delete_vault(Path(name): Path<String>) -> axum::response::Response {
     let vault = match open_vault_or_err().await {
         Ok(v) => v,
@@ -825,6 +841,7 @@ pub fn router<S: Storage>(storage: Arc<S>) -> Router {
         .route("/bindings", get(get_bindings))
         .route("/vault", get(get_vault).post(add_vault))
         .route("/vault/:name", delete(delete_vault))
+        .route("/vault/:name/reveal", get(reveal_vault))
         .route("/database", get(get_database).put(put_database))
         .route("/database/test", post(test_database))
         .route("/database/copy", post(copy_database))

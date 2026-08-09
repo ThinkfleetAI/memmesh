@@ -184,9 +184,10 @@ impl Vault {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Decrypt a single secret. **Internal / human-CLI only** — never wire this
-    /// to a model-facing tool.
-    async fn reveal(&self, name: &str) -> anyhow::Result<Option<String>> {
+    /// Decrypt a single secret. **Human-facing only** (CLI / loopback console
+    /// reveal) — never wire this to a model-facing MCP tool. The AI uses
+    /// `run()` instead, which scrubs values from output.
+    pub async fn reveal(&self, name: &str) -> anyhow::Result<Option<String>> {
         let row = sqlx::query("SELECT nonce, ciphertext FROM secret WHERE name = ?1")
             .bind(name)
             .fetch_optional(&self.pool)

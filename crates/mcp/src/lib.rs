@@ -618,9 +618,12 @@ async fn handle_tool_call<S: Storage>(
                 )))
             } else {
                 Ok(text_result(&format!(
-                    "Secret '{name}' is NOT set. Ask the user to add it (purpose: {purpose}) — \
-                     they can run `memmesh secret set {name}` or add it in the console's Vault \
-                     tab. Do not ask them to paste the value into the chat."
+                    "Secret '{name}' is NOT set (purpose: {purpose}). Prompt the user to enter it \
+                     securely — DO NOT ask them to paste the value into the chat. Give them this \
+                     one-click link, which opens the memmesh console's Vault tab with the name \
+                     pre-filled:\n\n  http://127.0.0.1:7878/?tab=vault&add={name}\n\n\
+                     Or they can run `memmesh secret set {name}`. Once they've added it, retry \
+                     using {{{{memmesh:{name}}}}} via memory_secret_run."
                 )))
             }
         }
