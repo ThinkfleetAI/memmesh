@@ -428,6 +428,76 @@ static RULES: Lazy<Vec<Rule>> = Lazy::new(|| {
             Low,
             "explicit-remember",
         ),
+        // Ideas / aspirations — softer, forward-looking language the user
+        // muses about ("we should…", "what if we…", "might want to…"). Kept
+        // LOWER priority than facts/decisions/rules so those still win; this
+        // block upgrades what would otherwise be a low-value raw observation
+        // into a first-class, listable `idea`. Non-anchored `\b…` variants
+        // catch the cue mid-sentence (e.g. "…app we might want to do X").
+        (
+            r"^idea[:\-] ",
+            "idea",
+            Project,
+            6.0,
+            Low,
+            "explicit-idea",
+        ),
+        (
+            r"\b(one|another|quick|random|cool) idea\b",
+            "idea",
+            Project,
+            6.0,
+            Low,
+            "explicit-idea",
+        ),
+        (
+            r"^what if we ",
+            "idea",
+            Project,
+            6.0,
+            Low,
+            "idea-what-if",
+        ),
+        (
+            r"\bwe (might|may) want to ",
+            "idea",
+            Project,
+            6.0,
+            Low,
+            "idea-aspiration",
+        ),
+        (
+            r"\b(i'?m|we'?re) thinking (we|that|about|maybe) ",
+            "idea",
+            Project,
+            6.0,
+            Low,
+            "idea-thinking",
+        ),
+        (
+            r"\bwe (should|could|ought to) ",
+            "idea",
+            Project,
+            5.0,
+            Low,
+            "idea-suggestion",
+        ),
+        (
+            r"\bit would be (nice|good|great|cool|helpful|useful) (to|if) ",
+            "idea",
+            Project,
+            5.0,
+            Low,
+            "idea-wish",
+        ),
+        (
+            r"\b(eventually|someday|down the road|at some point) we ",
+            "idea",
+            Project,
+            5.0,
+            Low,
+            "idea-future",
+        ),
     ];
 
     rules
