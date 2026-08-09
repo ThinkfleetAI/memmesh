@@ -233,6 +233,15 @@ enum Cmd {
         token: Option<String>,
     },
 
+    /// Encrypted secrets vault. Store credentials the AI can *reference* but
+    /// never read — values are entered here (never in chat), sealed with the
+    /// OS-keychain-backed master key, and used via execute-through-vault so
+    /// plaintext never reaches the model.
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
+    },
+
     /// Manage the agent teaching skill (markdown that tells the AI when
     /// and how to use the memory tools).
     Skill {
@@ -448,6 +457,33 @@ enum ConfigAction {
     /// Remove the `[sync]` section — drops the engine back into local-only
     /// mode. Used at logout.
     ClearSync,
+}
+
+#[derive(Subcommand)]
+enum SecretAction {
+    /// Store (or replace) a secret. Prompts for the value on a hidden line —
+    /// it is never passed as an argument or echoed.
+    Set {
+        /// Reference name, e.g. `aws-prod`. Used as `{{memmesh:aws-prod}}`.
+        name: String,
+        #[arg(long, help = "Category, e.g. aws / openai / db / password")]
+        kind: Option<String>,
+        #[arg(long, help = "Non-secret note shown in listings")]
+        desc: Option<String>,
+    },
+    /// List stored secrets (names, kinds, descriptions) — never values.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a secret.
+    Rm { name: String },
+    /// Execute-through-vault: run a command with `{{memmesh:NAME}}` references
+    /// resolved in-process. Output is returned with secret values scrubbed.
+    Run {
+        /// The command to run (quote it). e.g. "aws s3 ls --profile {{memmesh:aws-prod}}"
+        command: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -902,6 +938,70 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
                 println!("{}", serde_json::to_string_pretty(&suite)?);
             } else {
                 suite.print_human();
+            }
+        }
+
+        Cmd::Secret { action } => {
+            use memory_storage::vault::Vault;
+            let vault = Vault::open(&Vault::default_path())
+                .await
+                .context("opening secrets vault")?;
+            match action {
+                SecretAction::Set { name, kind, desc } => {
+                    // Hidden TTY prompt for humans; fall back to reading a line
+                    // from stdin when there's no terminal (piped / automation).
+                    let value = match rpassword::prompt_password(format!("Value for '{name}' (hidden): ")) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            use std::io::BufRead;
+                            let mut line = String::new();
+                            std::io::stdin().lock().read_line(&mut line)?;
+                            line.trim_end_matches(['\n', '\r']).to_string()
+                        }
+                    };
+                    if value.is_empty() {
+                        return Err(anyhow!("empty value — nothing stored"));
+                    }
+                    vault
+                        .set(&name, &value, kind.as_deref(), desc.as_deref(), Some("user"), None)
+                        .await?;
+                    println!("stored secret '{name}' (reference it as {{{{memmesh:{name}}}}})");
+                }
+                SecretAction::List { json } => {
+                    let secrets = vault.list().await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&secrets)?);
+                    } else if secrets.is_empty() {
+                        println!("no secrets stored. Add one with `memmesh secret set <name>`.");
+                    } else {
+                        for s in &secrets {
+                            println!(
+                                "  {}{}{}",
+                                s.name,
+                                s.kind.as_deref().map(|k| format!("  [{k}]")).unwrap_or_default(),
+                                s.description.as_deref().map(|d| format!("  — {d}")).unwrap_or_default(),
+                            );
+                        }
+                    }
+                }
+                SecretAction::Rm { name } => {
+                    if vault.delete(&name).await? {
+                        println!("removed '{name}'");
+                    } else {
+                        eprintln!("no secret named '{name}'");
+                        std::process::exit(2);
+                    }
+                }
+                SecretAction::Run { command } => {
+                    let r = vault.run(&command).await?;
+                    if !r.stdout.is_empty() {
+                        print!("{}", r.stdout);
+                    }
+                    if !r.stderr.is_empty() {
+                        eprint!("{}", r.stderr);
+                    }
+                    std::process::exit(r.exit_code);
+                }
             }
         }
 

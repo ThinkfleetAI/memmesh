@@ -25,6 +25,7 @@ pub mod quota;
 pub mod search;
 pub mod temporal;
 pub mod validate;
+pub mod vault;
 
 #[cfg(feature = "postgres")]
 pub mod postgres;

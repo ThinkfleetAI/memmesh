@@ -37,6 +37,12 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+# Secrets vault (encrypted credential storage)
+chacha20poly1305 = "0.10"
+keyring = { version = "3", features = ["apple-native", "sync-secret-service", "windows-native"] }
+zeroize = "1"
+rand = "0.8"
+rpassword = "7"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
