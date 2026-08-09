@@ -120,6 +120,7 @@
   <button data-tab="graph">Graph</button>
   <button data-tab="context">Context</button>
   <button data-tab="ideas">Ideas</button>
+  <button data-tab="vault">Vault</button>
   <button data-tab="duplicates">Duplicates</button>
   <button data-tab="playground">Playground</button>
   <button data-tab="sync">Sync</button>
@@ -203,6 +204,25 @@
     </div>
     <div class="hint">Ideas are captured automatically from your conversations (“we should…”, “what if we…”, “might want to…”) and tracked here, separate from facts. Archive one when it's done or acted on.</div>
     <div class="list" id="ideaList"></div>
+  </section>
+
+  <!-- VAULT -->
+  <section id="tab-vault" class="hidden">
+    <div class="card" style="margin-bottom:16px">
+      <div class="l" style="margin-bottom:8px">Add a secret</div>
+      <div class="hint" style="margin-top:0">Values are encrypted with your OS-keychain key and stored locally. The AI can reference a secret by name and run commands with it, but <b>can never read the value</b> — not here, not over MCP.</div>
+      <div class="row">
+        <input id="vName" type="text" placeholder="name (e.g. aws-prod)" style="max-width:200px" />
+        <input id="vKind" type="text" placeholder="kind (aws, db…)" style="max-width:140px" />
+        <input id="vDesc" type="text" placeholder="description (optional)" />
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input id="vValue" type="password" placeholder="secret value" style="flex:1" />
+        <button class="btn primary" id="vAdd">Save secret</button>
+      </div>
+    </div>
+    <div class="row"><span class="muted">Stored secrets — reference in commands as <code>{{memmesh:name}}</code></span><span class="spacer"></span><button class="btn" id="vRefresh">Refresh</button></div>
+    <div class="list" id="vaultList"></div>
   </section>
 
   <!-- DUPLICATES -->
@@ -320,12 +340,13 @@ function esc(s) { return (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
-  ['status','memories','graph','context','ideas','duplicates','playground','sync','logs','config'].forEach(t =>
+  ['status','memories','graph','context','ideas','vault','duplicates','playground','sync','logs','config'].forEach(t =>
     $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
   if (b.dataset.tab === 'memories') loadMemories();
   if (b.dataset.tab === 'graph') loadGraph();
   if (b.dataset.tab === 'context') runContext();
   if (b.dataset.tab === 'ideas') loadIdeas();
+  if (b.dataset.tab === 'vault') loadVault();
   if (b.dataset.tab === 'duplicates') { /* on demand */ }
   if (b.dataset.tab === 'sync') loadSync();
   if (b.dataset.tab === 'logs') loadLogs();
@@ -794,6 +815,45 @@ $('#ideaAdd').onclick = async () => {
 };
 $('#ideaRefresh').onclick = loadIdeas;
 $('#ideaInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ideaAdd').onclick(); });
+
+// ---- vault ----
+async function loadVault() {
+  try {
+    const rows = await api('/vault');
+    if (!rows.length) {
+      $('#vaultList').innerHTML = '<div class="empty">No secrets yet. Add credentials above — the AI can use them without ever seeing the value.</div>';
+      return;
+    }
+    $('#vaultList').innerHTML = rows.map(s => `
+      <div class="item" data-name="${esc(s.name)}">
+        <div class="meta"><span class="tag scope">${esc(s.name)}</span>
+          ${s.kind ? `<span class="tag">${esc(s.kind)}</span>` : ''}
+          ${s.last_used ? `<span class="id">used ${esc(s.last_used.slice(0,10))}</span>` : '<span class="id">never used</span>'}</div>
+        ${s.description ? `<div class="content">${esc(s.description)}</div>` : ''}
+        <div class="prov"><span>reference: {{memmesh:${esc(s.name)}}}</span></div>
+        <div class="actions"><button class="btn danger" data-act="del">Delete</button></div>
+      </div>`).join('');
+  } catch (e) { toast('Vault load failed: ' + e.message, 'err'); }
+}
+$('#vAdd').onclick = async () => {
+  const name = $('#vName').value.trim(), value = $('#vValue').value;
+  if (!name || !value) { toast('Name and value required', 'err'); return; }
+  try {
+    await api('/vault', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, value, kind: $('#vKind').value.trim() || null, description: $('#vDesc').value.trim() || null }) });
+    $('#vName').value = $('#vKind').value = $('#vDesc').value = $('#vValue').value = '';
+    toast('Secret saved (encrypted)', 'ok'); loadVault();
+  } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+};
+$('#vRefresh').onclick = loadVault;
+$('#vaultList').onclick = async (ev) => {
+  const btn = ev.target.closest('button[data-act=del]'); if (!btn) return;
+  const name = ev.target.closest('.item').dataset.name;
+  if (!confirm(`Delete secret '${name}'?`)) return;
+  try { await api('/vault/' + encodeURIComponent(name), { method: 'DELETE' });
+    toast('Deleted', 'ok'); ev.target.closest('.item').remove(); }
+  catch (e) { toast('Delete failed: ' + e.message, 'err'); }
+};
 
 // ---- boot ----
 poll();
