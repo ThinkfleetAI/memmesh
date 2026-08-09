@@ -119,6 +119,7 @@
   <button data-tab="memories">Memories</button>
   <button data-tab="graph">Graph</button>
   <button data-tab="context">Context</button>
+  <button data-tab="ideas">Ideas</button>
   <button data-tab="duplicates">Duplicates</button>
   <button data-tab="playground">Playground</button>
   <button data-tab="sync">Sync</button>
@@ -191,6 +192,17 @@
     <div class="hint">Exactly the memory block that gets injected into an AI tool's context for this query — the same <code>claude-context</code> format the SessionStart hook uses. This is “what the AI actually sees.”</div>
     <div class="row"><span class="muted" id="ctxMeta"></span><span class="spacer"></span><button class="btn" id="ctxCopy">Copy</button></div>
     <pre class="logs" id="ctxBlock" style="max-height:58vh"></pre>
+  </section>
+
+  <!-- IDEAS -->
+  <section id="tab-ideas" class="hidden">
+    <div class="row">
+      <input id="ideaInput" type="text" placeholder="Capture an idea…" />
+      <button class="btn primary" id="ideaAdd">Add idea</button>
+      <button class="btn" id="ideaRefresh">Refresh</button>
+    </div>
+    <div class="hint">Ideas are captured automatically from your conversations (“we should…”, “what if we…”, “might want to…”) and tracked here, separate from facts. Archive one when it's done or acted on.</div>
+    <div class="list" id="ideaList"></div>
   </section>
 
   <!-- DUPLICATES -->
@@ -308,11 +320,12 @@ function esc(s) { return (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
-  ['status','memories','graph','context','duplicates','playground','sync','logs','config'].forEach(t =>
+  ['status','memories','graph','context','ideas','duplicates','playground','sync','logs','config'].forEach(t =>
     $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
   if (b.dataset.tab === 'memories') loadMemories();
   if (b.dataset.tab === 'graph') loadGraph();
   if (b.dataset.tab === 'context') runContext();
+  if (b.dataset.tab === 'ideas') loadIdeas();
   if (b.dataset.tab === 'duplicates') { /* on demand */ }
   if (b.dataset.tab === 'sync') loadSync();
   if (b.dataset.tab === 'logs') loadLogs();
@@ -744,6 +757,43 @@ async function runContext() {
 $('#ctxRun').onclick = runContext;
 $('#ctxQuery').addEventListener('keydown', e => { if (e.key === 'Enter') runContext(); });
 $('#ctxCopy').onclick = () => { navigator.clipboard.writeText($('#ctxBlock').textContent); toast('Copied', 'ok'); };
+
+// ---- ideas ----
+async function loadIdeas() {
+  try {
+    const rows = await api('/memory?type=idea&limit=100');
+    if (!rows.length) {
+      $('#ideaList').innerHTML = '<div class="empty">No ideas yet — they appear as you brainstorm ("we should…", "what if we…"), or add one above.</div>';
+      return;
+    }
+    $('#ideaList').innerHTML = rows.map(m => `
+      <div class="item" data-id="${esc(m.id)}">
+        <div class="meta"><span class="tag scope">idea</span>
+          ${m.projectId ? `<span class="tag">${esc(m.projectId)}</span>` : ''}
+          <span class="id">${esc((m.created || '').slice(0, 10))}</span></div>
+        <div class="content">${esc(m.content)}</div>
+        <div class="actions"><button class="btn" data-act="done">✓ Done / archive</button></div>
+      </div>`).join('');
+  } catch (e) { toast('Ideas load failed: ' + e.message, 'err'); }
+}
+$('#ideaList').onclick = async (ev) => {
+  const btn = ev.target.closest('button[data-act=done]'); if (!btn) return;
+  const id = ev.target.closest('.item').dataset.id;
+  try {
+    await api('/memory/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Archived', 'ok'); ev.target.closest('.item').remove(); poll();
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+};
+$('#ideaAdd').onclick = async () => {
+  const v = $('#ideaInput').value.trim(); if (!v) return;
+  try {
+    await api('/observe', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'idea: ' + v }) });
+    $('#ideaInput').value = ''; toast('Idea captured', 'ok'); loadIdeas(); poll();
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+};
+$('#ideaRefresh').onclick = loadIdeas;
+$('#ideaInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ideaAdd').onclick(); });
 
 // ---- boot ----
 poll();
