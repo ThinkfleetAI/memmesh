@@ -12,6 +12,7 @@ members = [
     "crates/license",
     "crates/eval",
     "crates/cli",
+    "crates/desktop",
 ]
 
 [workspace.package]
