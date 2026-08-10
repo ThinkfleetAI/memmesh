@@ -33,7 +33,7 @@ const KEYRING_SERVICE: &str = "memmesh";
 const KEYRING_USER: &str = "vault-master-key";
 
 static PLACEHOLDER: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\{\{memmesh:([A-Za-z0-9_.\-]+)\}\}").unwrap());
+    Lazy::new(|| Regex::new(r"\{\{memmesh:([A-Za-z0-9_.\-]+)(?:\|([A-Za-z0-9_.\-]+))?\}\}").unwrap());
 
 /// Non-secret metadata about a stored credential (safe to show the model).
 #[derive(Debug, Clone, Serialize)]
@@ -210,24 +210,56 @@ impl Vault {
     /// value scrubbed. The plaintext lives only in this process, only for the
     /// duration of the run.
     pub async fn run(&self, command: &str) -> anyhow::Result<RunResult> {
-        // Collect referenced names.
-        let names: Vec<String> = PLACEHOLDER
+        // Each placeholder is {{memmesh:NAME}} or {{memmesh:NAME|FIELD}}. For a
+        // structured (multi-field) secret the value is JSON; FIELD selects one
+        // key. Collect (full_match, name, field) preserving the exact matched
+        // text so we substitute precisely.
+        let matches: Vec<(String, String, Option<String>)> = PLACEHOLDER
             .captures_iter(command)
-            .map(|c| c[1].to_string())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
+            .map(|c| {
+                (
+                    c.get(0).unwrap().as_str().to_string(),
+                    c[1].to_string(),
+                    c.get(2).map(|m| m.as_str().to_string()),
+                )
+            })
             .collect();
 
         let mut resolved = command.to_string();
         let mut secrets: Vec<String> = Vec::new();
-        for name in &names {
-            match self.reveal(name).await? {
-                Some(val) => {
-                    resolved = resolved.replace(&format!("{{{{memmesh:{name}}}}}"), &val);
-                    secrets.push(val);
+        let mut cache: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for (full, name, field) in &matches {
+            let raw = match cache.get(name) {
+                Some(v) => v.clone(),
+                None => match self.reveal(name).await? {
+                    Some(v) => {
+                        cache.insert(name.clone(), v.clone());
+                        used.insert(name.clone());
+                        v
+                    }
+                    None => anyhow::bail!("secret '{name}' is not in the vault"),
+                },
+            };
+            let substitution = match field {
+                Some(f) => {
+                    let obj: serde_json::Value = serde_json::from_str(&raw).map_err(|_| {
+                        anyhow::anyhow!("secret '{name}' is a single value; '{name}|{f}' needs a multi-field secret")
+                    })?;
+                    obj.get(f)
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .ok_or_else(|| anyhow::anyhow!("secret '{name}' has no field '{f}'"))?
                 }
-                None => anyhow::bail!("secret '{name}' is not in the vault"),
-            }
+                None => raw.clone(),
+            };
+            resolved = resolved.replace(full, &substitution);
+            secrets.push(substitution);
+        }
+        // Also scrub whole raw values (incl. JSON) from output, not just the
+        // fields that were substituted.
+        for v in cache.values() {
+            secrets.push(v.clone());
         }
 
         let output = tokio::process::Command::new("sh")
@@ -251,7 +283,7 @@ impl Vault {
             exit_code: output.status.code().unwrap_or(-1),
             stdout: scrub(String::from_utf8_lossy(&output.stdout).into_owned()),
             stderr: scrub(String::from_utf8_lossy(&output.stderr).into_owned()),
-            used: names,
+            used: used.into_iter().collect(),
         };
         secrets.iter_mut().for_each(|s| s.zeroize());
         Ok(result)

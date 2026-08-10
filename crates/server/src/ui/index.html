@@ -113,6 +113,7 @@
   .fieldlabel { display: block; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin: 12px 0 5px; }
   .fieldlabel input { display: block; width: 100%; margin-top: 5px; text-transform: none; letter-spacing: 0; font-weight: 400; }
   .reqname { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
+  .reqkind { font-family: system-ui, sans-serif; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-left: 6px; }
   .valrow { display: flex; gap: 8px; align-items: stretch; }
   .valrow input { flex: 1; font-family: var(--mono); }
   .iconbtn { flex: none; min-width: 52px; }
@@ -238,12 +239,8 @@
         </div>
       </div>
       <label class="fieldlabel">Secret name</label>
-      <div class="reqname" id="vReqName">—</div>
-      <label class="fieldlabel" for="vReqValue">Value</label>
-      <div class="valrow">
-        <input id="vReqValue" type="password" placeholder="paste the credential…" autocomplete="off" spellcheck="false" />
-        <button class="btn iconbtn" id="vReqToggle" type="button" title="show / hide">show</button>
-      </div>
+      <div class="reqname"><span id="vReqName">—</span> <span class="reqkind" id="vReqKind"></span></div>
+      <div id="vReqFields"></div>
       <div class="reqactions">
         <button class="btn primary" id="vReqSave">Save to vault</button>
         <button class="btn" id="vReqCancel">Cancel</button>
@@ -863,6 +860,41 @@ $('#ideaInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#id
 
 // ---- vault: focused credential request (AI-prompt landing) ----
 let reqPanelName = null;
+let reqPanelKind = 'custom';
+// Field specs per credential kind → the "proper screen" for each. A single
+// field named "value" is stored as a plain string; multiple fields are stored
+// as JSON and referenced as {{memmesh:name|field}}.
+const SECRET_KINDS = {
+  api_key:           { label: 'API key',          fields: [{ k: 'value', label: 'API key', secret: true }] },
+  token:             { label: 'Token',            fields: [{ k: 'value', label: 'Token', secret: true }] },
+  password:          { label: 'Password',         fields: [{ k: 'value', label: 'Password', secret: true }] },
+  basic_auth:        { label: 'Username & password', fields: [{ k: 'username', label: 'Username' }, { k: 'password', label: 'Password', secret: true }] },
+  oauth2:            { label: 'OAuth2 client',    fields: [{ k: 'clientId', label: 'Client ID' }, { k: 'clientSecret', label: 'Client secret', secret: true }] },
+  connection_string: { label: 'Connection URL',   fields: [{ k: 'value', label: 'Connection URL', secret: true, ph: 'postgres://user:pass@host:5432/db' }] },
+  ssh_key:           { label: 'SSH private key',  fields: [{ k: 'value', label: 'Private key', secret: true, area: true, ph: '-----BEGIN OPENSSH PRIVATE KEY-----' }] },
+  custom:            { label: 'Secret',           fields: [{ k: 'value', label: 'Value', secret: true }] },
+};
+function renderReqFields(kind) {
+  const spec = SECRET_KINDS[kind] || SECRET_KINDS.custom;
+  $('#vReqKind').textContent = spec.label;
+  $('#vReqFields').innerHTML = spec.fields.map(f => `
+    <label class="fieldlabel">${esc(f.label)}
+      <div class="valrow">
+        ${f.area
+          ? `<textarea class="reqfield" data-k="${f.k}" rows="4" spellcheck="false" placeholder="${esc(f.ph || '')}"></textarea>`
+          : `<input class="reqfield" data-k="${f.k}" type="${f.secret ? 'password' : 'text'}" autocomplete="off" spellcheck="false" placeholder="${esc(f.ph || '')}" />`}
+        ${f.secret && !f.area ? `<button class="btn iconbtn reqtoggle" type="button">show</button>` : ''}
+      </div>
+    </label>`).join('');
+}
+// delegated show/hide for any password field in the panel
+$('#vReqFields').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.reqtoggle'); if (!btn) return;
+  const input = btn.parentElement.querySelector('.reqfield');
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'hide' : 'show';
+});
 function bindToggle(btnSel, inputSel) {
   $(btnSel).onclick = () => {
     const i = $(inputSel);
@@ -871,19 +903,26 @@ function bindToggle(btnSel, inputSel) {
     $(btnSel).textContent = show ? 'hide' : 'show';
   };
 }
-bindToggle('#vReqToggle', '#vReqValue');
 bindToggle('#vValToggle', '#vValue');
 $('#vReqSave').onclick = async () => {
-  const value = $('#vReqValue').value;
-  if (!reqPanelName || !value) { toast('Enter the value', 'err'); return; }
+  const fields = [...$('#vReqFields').querySelectorAll('.reqfield')];
+  const entries = fields.map(f => [f.dataset.k, f.value]);
+  if (entries.some(([, v]) => !v)) { toast('Fill in every field', 'err'); return; }
+  // single "value" → plain string; multiple → JSON record.
+  const value = (entries.length === 1 && entries[0][0] === 'value')
+    ? entries[0][1]
+    : JSON.stringify(Object.fromEntries(entries));
   try {
     await api('/vault', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: reqPanelName, value }) });
+      body: JSON.stringify({ name: reqPanelName, value, kind: reqPanelKind }) });
     const panel = $('#vReqPanel');
     panel.classList.add('saved');
+    const refHint = entries.length > 1
+      ? `Reference a field as <code>{{memmesh:${esc(reqPanelName)}|${esc(entries[0][0])}}}</code>.`
+      : '';
     panel.innerHTML = `<div class="reqhead"><span class="reqicon">✅</span><div>
       <div class="reqtitle">Saved — the assistant can use it now</div>
-      <div class="reqsub"><code>${esc(reqPanelName)}</code> is encrypted in your vault. You can return to your AI tool.</div></div></div>`;
+      <div class="reqsub"><code>${esc(reqPanelName)}</code> is encrypted in your vault. ${refHint} You can return to your AI tool.</div></div></div>`;
     loadVault();
   } catch (e) { toast('Save failed: ' + e.message, 'err'); }
 };
@@ -960,15 +999,29 @@ $('#vaultList').onclick = async (ev) => {
   const addName = q.get('add');
   if (addName) {
     reqPanelName = addName;
+    reqPanelKind = q.get('kind') || inferKind(addName);
     $('#vReqName').textContent = addName;
     const purpose = q.get('purpose');
     $('#vReqSub').innerHTML = purpose
       ? `Requested for: <b>${esc(purpose)}</b>. It's encrypted with your OS keychain — the assistant can use it but never sees the value.`
       : `Enter it below. It's encrypted with your OS keychain — the assistant can use it but never sees the value.`;
+    renderReqFields(reqPanelKind);
     $('#vReqPanel').classList.remove('hidden');
-    setTimeout(() => $('#vReqValue').focus(), 200);
+    setTimeout(() => { const f = $('#vReqFields').querySelector('.reqfield'); if (f) f.focus(); }, 200);
   }
 })();
+// Best-effort kind inference from the name when the AI didn't declare one.
+function inferKind(name) {
+  const n = name.toLowerCase();
+  if (/(user.*pass|basic.?auth|login)/.test(n)) return 'basic_auth';
+  if (/(oauth|client.?secret|client.?id)/.test(n)) return 'oauth2';
+  if (/(^|[_-])(db|database|postgres|mysql|mongo|redis|conn|dsn)/.test(n) || /url$/.test(n)) return 'connection_string';
+  if (/(ssh|private.?key|pem)/.test(n)) return 'ssh_key';
+  if (/pass(word|wd)?$/.test(n)) return 'password';
+  if (/token$/.test(n)) return 'token';
+  if (/(api.?key|apikey|key$)/.test(n)) return 'api_key';
+  return 'custom';
+}
 
 // ---- boot ----
 poll();

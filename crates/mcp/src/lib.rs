@@ -410,12 +410,13 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "memory_secret_request",
-            "description": "Check whether a credential is available and, if not, get instructions to have the USER add it. Call this when you need a credential (API key, password, token). It returns status only — never a value. If missing, tell the user to add it via `memmesh secret set <name>` or the console Vault tab; NEVER ask the user to paste a secret into the chat.",
+            "description": "Check whether a credential is available and, if not, get a link that prompts the USER to add it in the vault. Call this when you need a credential (API key, password, token…). Returns status only — never a value. Pass `kind` so the vault shows the right entry form for that credential. If missing, relay the returned link (or `memmesh secret set <name>`); NEVER ask the user to paste a secret into the chat.",
             "inputSchema": {
                 "type": "object",
                 "required": ["name"],
                 "properties": {
                     "name":    { "type": "string", "description": "Reference name, e.g. 'aws-prod'." },
+                    "kind":    { "type": "string", "enum": ["api_key","password","basic_auth","oauth2","connection_string","ssh_key","token","custom"], "description": "What kind of credential this is, so the vault renders the matching form (single value, username+password, DSN, key, etc.). Multi-field kinds are referenced field-wise as {{memmesh:NAME|field}}." },
                     "purpose": { "type": "string", "description": "Why you need it (shown to the user)." }
                 }
             }
@@ -618,11 +619,20 @@ async fn handle_tool_call<S: Storage>(
                 )))
             } else {
                 let purpose_enc = purpose.replace(' ', "%20");
+                // Optional credential kind so the vault shows the right form
+                // (api_key / password / basic_auth / oauth2 / connection_string /
+                // ssh_key / token / custom).
+                let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                let kind_param = if kind.is_empty() {
+                    String::new()
+                } else {
+                    format!("&kind={}", kind.replace(' ', "%20"))
+                };
                 Ok(text_result(&format!(
                     "Secret '{name}' is NOT set (purpose: {purpose}). Prompt the user to enter it \
                      securely — DO NOT ask them to paste the value into the chat. Give them this \
                      one-click link, which opens the memmesh console's Vault tab with a focused \
-                     entry form (name pre-filled):\n\n  http://127.0.0.1:7878/?tab=vault&add={name}&purpose={purpose_enc}\n\n\
+                     entry form (fields matched to the credential kind, name pre-filled):\n\n  http://127.0.0.1:7878/?tab=vault&add={name}&purpose={purpose_enc}{kind_param}\n\n\
                      Or they can run `memmesh secret set {name}`. Once they've added it, retry \
                      using {{{{memmesh:{name}}}}} via memory_secret_run."
                 )))

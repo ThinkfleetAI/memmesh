@@ -426,11 +426,19 @@ pub async fn run_cycle(
                 &sync_cfg.platform_id,
                 sync_cfg.binding_policy,
             )
-            .await?
+            .await
             {
-                Some(pid) => pid,
-                None => {
+                Ok(Some(pid)) => pid,
+                Ok(None) => {
                     debug!(project_id, "skipping unbound project this cycle");
+                    continue;
+                }
+                // One project failing to resolve must not abort the whole
+                // cycle — otherwise a single unbindable cwd blocks every
+                // other project's push indefinitely. Same degrade-and-
+                // retry contract as a failed push below.
+                Err(e) => {
+                    warn!(error = %e, project_id, "could not resolve project; skipping this cycle");
                     continue;
                 }
             };
@@ -543,9 +551,19 @@ async fn resolve_project_for_push(
 ) -> Result<Option<String>, SyncError> {
     // Heuristic: SaaS project IDs are 21-character ApIds (alphanumeric).
     // If `project_id` already looks like one, trust it. Otherwise it's a
-    // local cwd-basename and we have to resolve via auto-create.
+    // local cwd-basename and we have to resolve it.
     if looks_like_apid(project_id) {
         return Ok(Some(project_id.to_string()));
+    }
+
+    // An explicit binding (from `memmesh bind`) always wins over the
+    // policy fallback. Without this the CLI's binding was inert on the
+    // push path, and auto-create was the only route to a SaaS id — which
+    // a SERVICE-principal API key cannot take, since /v1/memory/sync/bind
+    // is USER-only. Checking here lets an API key alone drive sync.
+    if let Some(bound) = lookup_binding(storage, project_id, platform_id).await? {
+        debug!(project_id, resolved = bound, "resolved via explicit binding");
+        return Ok(Some(bound));
     }
 
     use memory_core::config::BindingPolicy::*;
@@ -582,6 +600,41 @@ async fn resolve_project_for_push(
     }
 }
 
+/// Find the SaaS project a local cwd-basename projectId is bound to.
+///
+/// Two binding shapes exist in the wild and both have to resolve:
+/// - `memmesh bind` stores an absolute path as `cwd`, so the basename is
+///   what a memory row's projectId will carry.
+/// - the auto-create branch below stores the bare basename as `cwd`.
+///
+/// Exact match is tried first (cheap, covers auto-created rows), then a
+/// basename scan. Bindings for another platform are ignored — a machine
+/// may hold bindings for several orgs. `list_bindings` is ordered by
+/// `updated DESC`, so the most recent binding wins a basename collision.
+async fn lookup_binding(
+    storage: &(dyn Storage + Send + Sync),
+    project_id: &str,
+    platform_id: &str,
+) -> Result<Option<String>, SyncError> {
+    if let Some(b) = storage.get_binding(project_id).await? {
+        if b.platform_id == platform_id {
+            return Ok(Some(b.project_id));
+        }
+    }
+    let basename_matches = |cwd: &str| {
+        std::path::Path::new(cwd)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n == project_id)
+    };
+    Ok(storage
+        .list_bindings()
+        .await?
+        .into_iter()
+        .find(|b| b.platform_id == platform_id && basename_matches(&b.cwd))
+        .map(|b| b.project_id))
+}
+
 /// Heuristic — 21 char alphanumeric is the ApId shape activepieces uses.
 fn looks_like_apid(s: &str) -> bool {
     s.len() == 21 && s.chars().all(|c| c.is_ascii_alphanumeric())
@@ -589,4 +642,60 @@ fn looks_like_apid(s: &str) -> bool {
 
 fn pull_cursor_key(project_id: &str) -> String {
     format!("{}:{}", sync_state_key::PULL_CURSOR, project_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use memory_storage::sqlite::SqliteStore;
+
+    async fn store_with(bindings: &[(&str, &str, &str)]) -> SqliteStore {
+        let s = SqliteStore::connect("sqlite::memory:").await.unwrap();
+        s.migrate().await.unwrap();
+        for (cwd, platform_id, project_id) in bindings {
+            let now = Utc::now();
+            s.save_binding(&ProjectBinding {
+                cwd: (*cwd).to_string(),
+                platform_id: (*platform_id).to_string(),
+                project_id: (*project_id).to_string(),
+                created: now,
+                updated: now,
+            })
+            .await
+            .unwrap();
+        }
+        s
+    }
+
+    /// `memmesh bind` stores an absolute path, but memory rows carry the
+    /// cwd basename — the mismatch that made the CLI binding inert.
+    #[tokio::test]
+    async fn resolves_absolute_path_binding_by_basename() {
+        let s = store_with(&[("/Users/x/Dev/memory-thinkfleet", "plat1", "SAAS_PROJECT_ID_001")]).await;
+        let got = lookup_binding(&s, "memory-thinkfleet", "plat1").await.unwrap();
+        assert_eq!(got.as_deref(), Some("SAAS_PROJECT_ID_001"));
+    }
+
+    /// The auto-create branch stores the bare basename as `cwd`.
+    #[tokio::test]
+    async fn resolves_bare_basename_binding() {
+        let s = store_with(&[("memmesh", "plat1", "SAAS_PROJECT_ID_002")]).await;
+        let got = lookup_binding(&s, "memmesh", "plat1").await.unwrap();
+        assert_eq!(got.as_deref(), Some("SAAS_PROJECT_ID_002"));
+    }
+
+    /// A binding belonging to another org must not leak across platforms.
+    #[tokio::test]
+    async fn ignores_other_platform_bindings() {
+        let s = store_with(&[("/Users/x/Dev/growth-os", "other-plat", "SAAS_PROJECT_ID_003")]).await;
+        let got = lookup_binding(&s, "growth-os", "plat1").await.unwrap();
+        assert_eq!(got, None);
+    }
+
+    #[tokio::test]
+    async fn unbound_project_returns_none() {
+        let s = store_with(&[]).await;
+        let got = lookup_binding(&s, "never-bound", "plat1").await.unwrap();
+        assert_eq!(got, None);
+    }
 }
