@@ -104,6 +104,23 @@
   .cov #covText { margin-top: 6px; }
   .reveal-box { margin-top: 8px; }
   .secret-val { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border: 1px dashed var(--warn); color: var(--fg); padding: 5px 9px; border-radius: 6px; word-break: break-all; user-select: all; display: inline-block; }
+  /* Focused credential-request card (the AI-prompt landing) */
+  .reqcard { background: var(--panel); border: 1px solid var(--accent); border-radius: 14px; padding: 22px 24px; margin-bottom: 20px; max-width: 560px; box-shadow: 0 8px 30px color-mix(in srgb, var(--accent) 14%, transparent); }
+  .reqhead { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 18px; }
+  .reqicon { font-size: 26px; line-height: 1; }
+  .reqtitle { font-size: 17px; font-weight: 700; }
+  .reqsub { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+  .fieldlabel { display: block; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin: 12px 0 5px; }
+  .fieldlabel input { display: block; width: 100%; margin-top: 5px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .reqname { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
+  .valrow { display: flex; gap: 8px; align-items: stretch; }
+  .valrow input { flex: 1; font-family: var(--mono); }
+  .iconbtn { flex: none; min-width: 52px; }
+  .reqactions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+  .reqcard.saved { border-color: var(--ok); box-shadow: 0 8px 30px color-mix(in srgb, var(--ok) 16%, transparent); }
+  details.addsecret { padding: 14px 16px; }
+  details.addsecret summary { cursor: pointer; font-weight: 600; color: var(--fg); font-size: 13px; }
+  .formgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 10px; }
   .pg { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .pgcol .item { padding: 9px 11px; }
   @media (max-width: 720px) { .pg { grid-template-columns: 1fr; } }
@@ -210,19 +227,45 @@
 
   <!-- VAULT -->
   <section id="tab-vault" class="hidden">
-    <div class="card" style="margin-bottom:16px">
-      <div class="l" style="margin-bottom:8px">Add a secret</div>
-      <div class="hint" style="margin-top:0">Values are encrypted with your OS-keychain key and stored locally. The AI can reference a secret by name and run commands with it, but <b>can never read the value</b> — not here, not over MCP.</div>
-      <div class="row">
-        <input id="vName" type="text" placeholder="name (e.g. aws-prod)" style="max-width:200px" />
-        <input id="vKind" type="text" placeholder="kind (aws, db…)" style="max-width:140px" />
-        <input id="vDesc" type="text" placeholder="description (optional)" />
+    <!-- Focused credential request — shown when an AI tool sends the user here
+         via ?add=NAME. The one-field "just enter this" experience. -->
+    <div id="vReqPanel" class="reqcard hidden">
+      <div class="reqhead">
+        <span class="reqicon">🔒</span>
+        <div>
+          <div class="reqtitle">An AI tool needs a credential</div>
+          <div class="reqsub" id="vReqSub">Enter it below. It's encrypted with your OS keychain — the assistant can use it but never sees the value.</div>
+        </div>
       </div>
-      <div class="row" style="margin-top:8px">
-        <input id="vValue" type="password" placeholder="secret value" style="flex:1" />
-        <button class="btn primary" id="vAdd">Save secret</button>
+      <label class="fieldlabel">Secret name</label>
+      <div class="reqname" id="vReqName">—</div>
+      <label class="fieldlabel" for="vReqValue">Value</label>
+      <div class="valrow">
+        <input id="vReqValue" type="password" placeholder="paste the credential…" autocomplete="off" spellcheck="false" />
+        <button class="btn iconbtn" id="vReqToggle" type="button" title="show / hide">show</button>
+      </div>
+      <div class="reqactions">
+        <button class="btn primary" id="vReqSave">Save to vault</button>
+        <button class="btn" id="vReqCancel">Cancel</button>
+        <span class="muted" id="vReqMsg"></span>
       </div>
     </div>
+
+    <details class="card addsecret" id="vAddCard">
+      <summary>+ Add a secret manually</summary>
+      <div class="hint" style="margin:8px 0">Values are encrypted with your OS-keychain key and stored locally. The AI references a secret by name and can run commands with it, but <b>never sees the value</b>.</div>
+      <div class="formgrid">
+        <label class="fieldlabel">Name<input id="vName" type="text" placeholder="aws-prod" /></label>
+        <label class="fieldlabel">Kind<input id="vKind" type="text" placeholder="aws, db, token…" /></label>
+        <label class="fieldlabel" style="grid-column:1/-1">Description<input id="vDesc" type="text" placeholder="what this credential is for (optional)" /></label>
+        <label class="fieldlabel" style="grid-column:1/-1">Value
+          <div class="valrow"><input id="vValue" type="password" placeholder="secret value" autocomplete="off" />
+            <button class="btn iconbtn" id="vValToggle" type="button" title="show / hide">show</button></div>
+        </label>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="vAdd">Save secret</button></div>
+    </details>
+
     <div class="row"><span class="muted">Stored secrets — reference in commands as <code>{{memmesh:name}}</code></span><span class="spacer"></span><button class="btn" id="vRefresh">Refresh</button></div>
     <div class="list" id="vaultList"></div>
   </section>
@@ -818,6 +861,34 @@ $('#ideaAdd').onclick = async () => {
 $('#ideaRefresh').onclick = loadIdeas;
 $('#ideaInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ideaAdd').onclick(); });
 
+// ---- vault: focused credential request (AI-prompt landing) ----
+let reqPanelName = null;
+function bindToggle(btnSel, inputSel) {
+  $(btnSel).onclick = () => {
+    const i = $(inputSel);
+    const show = i.type === 'password';
+    i.type = show ? 'text' : 'password';
+    $(btnSel).textContent = show ? 'hide' : 'show';
+  };
+}
+bindToggle('#vReqToggle', '#vReqValue');
+bindToggle('#vValToggle', '#vValue');
+$('#vReqSave').onclick = async () => {
+  const value = $('#vReqValue').value;
+  if (!reqPanelName || !value) { toast('Enter the value', 'err'); return; }
+  try {
+    await api('/vault', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: reqPanelName, value }) });
+    const panel = $('#vReqPanel');
+    panel.classList.add('saved');
+    panel.innerHTML = `<div class="reqhead"><span class="reqicon">✅</span><div>
+      <div class="reqtitle">Saved — the assistant can use it now</div>
+      <div class="reqsub"><code>${esc(reqPanelName)}</code> is encrypted in your vault. You can return to your AI tool.</div></div></div>`;
+    loadVault();
+  } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+};
+$('#vReqCancel').onclick = () => $('#vReqPanel').classList.add('hidden');
+
 // ---- vault ----
 async function loadVault() {
   try {
@@ -886,10 +957,16 @@ $('#vaultList').onclick = async (ev) => {
     const b = [...document.querySelectorAll('nav button')].find(x => x.dataset.tab === tab);
     if (b) b.click();
   }
-  if (q.get('add')) {
-    $('#vName').value = q.get('add');
-    if (q.get('kind')) $('#vKind').value = q.get('kind');
-    setTimeout(() => $('#vValue').focus(), 150);
+  const addName = q.get('add');
+  if (addName) {
+    reqPanelName = addName;
+    $('#vReqName').textContent = addName;
+    const purpose = q.get('purpose');
+    $('#vReqSub').innerHTML = purpose
+      ? `Requested for: <b>${esc(purpose)}</b>. It's encrypted with your OS keychain — the assistant can use it but never sees the value.`
+      : `Enter it below. It's encrypted with your OS keychain — the assistant can use it but never sees the value.`;
+    $('#vReqPanel').classList.remove('hidden');
+    setTimeout(() => $('#vReqValue').focus(), 200);
   }
 })();
 

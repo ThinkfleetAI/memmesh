@@ -617,11 +617,12 @@ async fn handle_tool_call<S: Storage>(
                      {{{{memmesh:{name}}}}} in the command — you will never see its value."
                 )))
             } else {
+                let purpose_enc = purpose.replace(' ', "%20");
                 Ok(text_result(&format!(
                     "Secret '{name}' is NOT set (purpose: {purpose}). Prompt the user to enter it \
                      securely — DO NOT ask them to paste the value into the chat. Give them this \
-                     one-click link, which opens the memmesh console's Vault tab with the name \
-                     pre-filled:\n\n  http://127.0.0.1:7878/?tab=vault&add={name}\n\n\
+                     one-click link, which opens the memmesh console's Vault tab with a focused \
+                     entry form (name pre-filled):\n\n  http://127.0.0.1:7878/?tab=vault&add={name}&purpose={purpose_enc}\n\n\
                      Or they can run `memmesh secret set {name}`. Once they've added it, retry \
                      using {{{{memmesh:{name}}}}} via memory_secret_run."
                 )))
