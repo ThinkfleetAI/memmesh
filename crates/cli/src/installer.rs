@@ -332,6 +332,19 @@ fn install_claude_code_hook(settings_path: &Path, binary: &Path) -> Result<()> {
     });
     upsert_owned_hook(hooks_obj, "SessionStart", recall_hook, "memmesh search")?;
 
+    // 3. ENFORCE — PreToolUse secret-guard on Bash: block a command that
+    //    carries a live credential and redirect it to the vault. Deterministic
+    //    enforcement the advisory skill can't guarantee — secrets can't reach a
+    //    shell command or the transcript. Fast (regex only, no engine init).
+    let guard_hook = serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [ {
+            "type": "command",
+            "command": format!("{bin} hook secret-guard"),
+        } ]
+    });
+    upsert_owned_hook(hooks_obj, "PreToolUse", guard_hook, "hook secret-guard")?;
+
     let serialized = serde_json::to_string_pretty(&doc)?;
     std::fs::write(settings_path, serialized)?;
     Ok(())

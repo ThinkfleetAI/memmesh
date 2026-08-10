@@ -206,6 +206,13 @@ enum Cmd {
         http: String,
     },
 
+    /// Internal hooks for AI-tool integration (wired by `install`). Reads a
+    /// tool's hook JSON on stdin. Not meant to be called by hand.
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+
     /// Launch the local web console: starts the REST API, serves the
     /// memory management UI, and opens it in your browser. One command to
     /// see engine status, browse memories, tail logs, and tweak config.
@@ -487,6 +494,14 @@ enum SecretAction {
 }
 
 #[derive(Subcommand)]
+enum HookAction {
+    /// PreToolUse guard: block a tool command that carries a live credential,
+    /// redirecting it to the vault. Reads the tool's PreToolUse JSON on stdin;
+    /// exit 2 (with a reason on stderr) blocks the call.
+    SecretGuard,
+}
+
+#[derive(Subcommand)]
 enum SkillAction {
     /// Print the skill markdown to stdout.
     Print,
@@ -511,6 +526,13 @@ const SKILL_MD: &str = include_str!("../../../skills/memmesh/SKILL.md");
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Hooks run on EVERY tool call (e.g. Claude Code PreToolUse before every
+    // Bash command), so handle them here — before tracing / license / store
+    // setup — to keep them fast and side-effect-free.
+    if let Cmd::Hook { action } = &cli.cmd {
+        return run_hook(action);
+    }
 
     // Hold the log-file guard for the whole process so buffered log lines
     // flush on exit. Dropping it early would truncate the tail of the log.
@@ -556,6 +578,9 @@ async fn main() -> Result<()> {
 /// `main` selected. Monomorphized once per backend.
 async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()> {
     match cli.cmd {
+        // Hooks are dispatched in main() before engine setup.
+        Cmd::Hook { .. } => unreachable!("hook handled before dispatch"),
+
         Cmd::Migrate => {
             let version = store.migrate().await?;
             println!("schema version: {version}");
@@ -1496,6 +1521,47 @@ fn detect_git_project() -> Option<String> {
     let trimmed = path.trim();
     let last = std::path::Path::new(trimmed).file_name()?.to_str()?;
     Some(last.to_string())
+}
+
+/// Handle an AI-tool integration hook. Fast, synchronous, no engine init.
+fn run_hook(action: &HookAction) -> Result<()> {
+    match action {
+        HookAction::SecretGuard => secret_guard(),
+    }
+}
+
+/// PreToolUse secret guard. Reads the tool's hook JSON on stdin, scans the
+/// command it's about to run, and BLOCKS (exit 2) if it carries a live
+/// credential — redirecting the user/agent to the vault. This is the
+/// deterministic enforcement the advisory skill can't guarantee: a secret
+/// physically cannot reach a shell command or the transcript.
+fn secret_guard() -> Result<()> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).ok();
+
+    // Pull the command out of the hook envelope; fall back to the whole
+    // payload so we still scan if the shape is unfamiliar.
+    let scanned: String = serde_json::from_str::<serde_json::Value>(&buf)
+        .ok()
+        .and_then(|v| {
+            v.get("tool_input")
+                .and_then(|ti| ti.get("command").or_else(|| ti.get("script")))
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or(buf);
+
+    if memory_core::extraction::contains_secret(&scanned) {
+        eprintln!(
+            "⛔ memmesh secret-guard: this command appears to contain a live credential.\n\
+             Never put secrets in a command or the transcript. Store it in the vault instead:\n\
+             • run `memmesh secret set <name>`  (or open http://127.0.0.1:7878/?tab=vault&add=<name>)\n\
+             then reference it as {{{{memmesh:<name>}}}} and run via the memory_secret_run tool."
+        );
+        std::process::exit(2);
+    }
+    Ok(())
 }
 
 /// AI-tool hooks pipe a JSON envelope to stdin rather than the raw prompt.
