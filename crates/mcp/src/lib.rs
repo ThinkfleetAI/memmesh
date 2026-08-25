@@ -123,6 +123,22 @@ pub async fn run_stdio<S: Storage>(storage: Arc<S>, license: License) -> Result<
     Ok(())
 }
 
+/// Handle a single JSON-RPC message (raw string) and return the serialized
+/// response value, or `None` for notifications (which get no response). Shared
+/// by the stdio loop and the Streamable-HTTP transport in `memory-server`.
+pub async fn handle_message<S: Storage>(
+    message: &str,
+    storage: &S,
+    license: &License,
+) -> Option<serde_json::Value> {
+    handle_line(message, storage, license).await.map(|resp| {
+        serde_json::to_value(resp).unwrap_or_else(|e| {
+            json!({ "jsonrpc": "2.0", "id": null,
+                    "error": { "code": -32603, "message": e.to_string() } })
+        })
+    })
+}
+
 // Both early-return blocks below check id-presence and need readable control
 // flow with side effects (tracing). The clippy `?` rewrite hides intent.
 #[allow(clippy::question_mark)]
@@ -165,17 +181,30 @@ async fn handle_line<S: Storage>(
     }
 
     let response = match req.method.as_str() {
-        "initialize" => JsonRpcResponse::ok(
-            req.id,
-            json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {} },
-                "serverInfo": {
-                    "name": SERVER_NAME,
-                    "version": SERVER_VERSION,
-                }
-            }),
-        ),
+        "initialize" => {
+            // Echo the client's requested protocol version when present. stdio
+            // clients (Claude Code) send 2024-11-05; Streamable-HTTP clients
+            // (ChatGPT / Claude.ai connectors) negotiate newer revisions
+            // (2025-03-26 / 2025-06-18). Our tool surface is compatible across
+            // all of them, so echoing avoids a version-mismatch rejection.
+            let negotiated = req
+                .params
+                .get("protocolVersion")
+                .and_then(|v| v.as_str())
+                .unwrap_or(PROTOCOL_VERSION)
+                .to_string();
+            JsonRpcResponse::ok(
+                req.id,
+                json!({
+                    "protocolVersion": negotiated,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": {
+                        "name": SERVER_NAME,
+                        "version": SERVER_VERSION,
+                    }
+                }),
+            )
+        }
 
         "tools/list" => JsonRpcResponse::ok(req.id, json!({ "tools": tool_definitions() })),
 
@@ -373,6 +402,35 @@ fn tool_definitions() -> serde_json::Value {
                     "dryRun":     { "type": "boolean", "default": false, "description": "Preview collapses without writing." }
                 }
             }
+        },
+        {
+            "name": "memory_secret_list",
+            "description": "List the names/kinds/descriptions of credentials in the encrypted vault. NEVER returns values — you cannot read a secret, only reference it. Use before secret_run to see what's available.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "memory_secret_request",
+            "description": "Check whether a credential is available and, if not, get a link that prompts the USER to add it in the vault. Call this when you need a credential (API key, password, token…). Returns status only — never a value. Pass `kind` so the vault shows the right entry form for that credential. If missing, relay the returned link (or `memmesh secret set <name>`); NEVER ask the user to paste a secret into the chat.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                    "name":    { "type": "string", "description": "Reference name, e.g. 'aws-prod'." },
+                    "kind":    { "type": "string", "enum": ["api_key","password","basic_auth","oauth2","connection_string","ssh_key","token","custom"], "description": "What kind of credential this is, so the vault renders the matching form (single value, username+password, DSN, key, etc.). Multi-field kinds are referenced field-wise as {{memmesh:NAME|field}}." },
+                    "purpose": { "type": "string", "description": "Why you need it (shown to the user)." }
+                }
+            }
+        },
+        {
+            "name": "memory_secret_run",
+            "description": "Execute-through-vault: run a shell command that references vault secrets as {{memmesh:NAME}} placeholders. The engine substitutes the real values IN ITS OWN PROCESS, runs the command, and returns stdout/stderr with every secret value scrubbed to [redacted]. This is the ONLY way to use a secret — you never receive the plaintext. Example command: \"aws s3 ls --profile {{memmesh:aws-prod}}\".",
+            "inputSchema": {
+                "type": "object",
+                "required": ["command"],
+                "properties": {
+                    "command": { "type": "string", "description": "Shell command containing {{memmesh:NAME}} references." }
+                }
+            }
         }
     ])
 }
@@ -540,8 +598,72 @@ async fn handle_tool_call<S: Storage>(
             Ok(text_result(&summary))
         }
 
+        // ── Secrets vault (the AI references, never reads) ──────────
+        "memory_secret_list" => {
+            let vault = open_vault().await?;
+            let secrets = vault.list().await?;
+            Ok(text_result(&serde_json::to_string_pretty(&secrets)?))
+        }
+
+        "memory_secret_request" => {
+            let name = args.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+            if name.is_empty() {
+                return Ok(text_result("error: 'name' is required"));
+            }
+            let purpose = args.get("purpose").and_then(|v| v.as_str()).unwrap_or("(unspecified)");
+            let vault = open_vault().await?;
+            if vault.exists(name).await? {
+                Ok(text_result(&format!(
+                    "Secret '{name}' is available. Use it by calling memory_secret_run with \
+                     {{{{memmesh:{name}}}}} in the command — you will never see its value."
+                )))
+            } else {
+                let purpose_enc = purpose.replace(' ', "%20");
+                // Optional credential kind so the vault shows the right form
+                // (api_key / password / basic_auth / oauth2 / connection_string /
+                // ssh_key / token / custom).
+                let kind = args.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+                let kind_param = if kind.is_empty() {
+                    String::new()
+                } else {
+                    format!("&kind={}", kind.replace(' ', "%20"))
+                };
+                Ok(text_result(&format!(
+                    "Secret '{name}' is NOT set (purpose: {purpose}). Prompt the user to enter it \
+                     securely — DO NOT ask them to paste the value into the chat. Give them this \
+                     one-click link, which opens the memmesh console's Vault tab with a focused \
+                     entry form (fields matched to the credential kind, name pre-filled):\n\n  http://127.0.0.1:7878/?tab=vault&add={name}&purpose={purpose_enc}{kind_param}\n\n\
+                     Or they can run `memmesh secret set {name}`. Once they've added it, retry \
+                     using {{{{memmesh:{name}}}}} via memory_secret_run."
+                )))
+            }
+        }
+
+        "memory_secret_run" => {
+            let command = args.get("command").and_then(|v| v.as_str()).unwrap_or_default();
+            if command.is_empty() {
+                return Ok(text_result("error: 'command' is required"));
+            }
+            let vault = open_vault().await?;
+            match vault.run(command).await {
+                Ok(r) => Ok(text_result(&serde_json::to_string_pretty(&serde_json::json!({
+                    "exitCode": r.exit_code,
+                    "stdout": r.stdout,
+                    "stderr": r.stderr,
+                    "usedSecrets": r.used,
+                    "note": "secret values are scrubbed from this output",
+                }))?)),
+                Err(e) => Ok(text_result(&format!("secret_run failed: {e}"))),
+            }
+        }
+
         other => anyhow::bail!("unknown tool: {other}"),
     }
+}
+
+/// Open the encrypted secrets vault (its own store + keychain-backed key).
+async fn open_vault() -> anyhow::Result<memory_storage::vault::Vault> {
+    memory_storage::vault::Vault::open(&memory_storage::vault::Vault::default_path()).await
 }
 
 // ─── Extraction tools (PR F) ─────────────────────────────────────────

@@ -206,6 +206,13 @@ enum Cmd {
         http: String,
     },
 
+    /// Internal hooks for AI-tool integration (wired by `install`). Reads a
+    /// tool's hook JSON on stdin. Not meant to be called by hand.
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+
     /// Launch the local web console: starts the REST API, serves the
     /// memory management UI, and opens it in your browser. One command to
     /// see engine status, browse memories, tail logs, and tweak config.
@@ -216,6 +223,30 @@ enum Cmd {
         /// Don't auto-open a browser; just print the URL.
         #[arg(long)]
         no_open: bool,
+    },
+
+    /// Start a REMOTE MCP server over Streamable HTTP for web chats
+    /// (ChatGPT + Claude.ai custom connectors), which can't use a local
+    /// stdio server. Unlike `mcp` (stdio) and `console` (loopback, no auth),
+    /// this is meant to be exposed publicly via a tunnel, so it REQUIRES a
+    /// bearer token. Pass --token or set MEMMESH_MCP_TOKEN; if neither is
+    /// set, a random token is generated and printed.
+    ServeMcp {
+        /// Address to bind. Default 127.0.0.1:7899 (put a tunnel in front).
+        #[arg(long, default_value = "127.0.0.1:7899")]
+        http: String,
+        /// Bearer token clients must send. Auto-generated if omitted.
+        #[arg(long, env = "MEMMESH_MCP_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Encrypted secrets vault. Store credentials the AI can *reference* but
+    /// never read — values are entered here (never in chat), sealed with the
+    /// OS-keychain-backed master key, and used via execute-through-vault so
+    /// plaintext never reaches the model.
+    Secret {
+        #[command(subcommand)]
+        action: SecretAction,
     },
 
     /// Manage the agent teaching skill (markdown that tells the AI when
@@ -436,6 +467,41 @@ enum ConfigAction {
 }
 
 #[derive(Subcommand)]
+enum SecretAction {
+    /// Store (or replace) a secret. Prompts for the value on a hidden line —
+    /// it is never passed as an argument or echoed.
+    Set {
+        /// Reference name, e.g. `aws-prod`. Used as `{{memmesh:aws-prod}}`.
+        name: String,
+        #[arg(long, help = "Category, e.g. aws / openai / db / password")]
+        kind: Option<String>,
+        #[arg(long, help = "Non-secret note shown in listings")]
+        desc: Option<String>,
+    },
+    /// List stored secrets (names, kinds, descriptions) — never values.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a secret.
+    Rm { name: String },
+    /// Execute-through-vault: run a command with `{{memmesh:NAME}}` references
+    /// resolved in-process. Output is returned with secret values scrubbed.
+    Run {
+        /// The command to run (quote it). e.g. "aws s3 ls --profile {{memmesh:aws-prod}}"
+        command: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookAction {
+    /// PreToolUse guard: block a tool command that carries a live credential,
+    /// redirecting it to the vault. Reads the tool's PreToolUse JSON on stdin;
+    /// exit 2 (with a reason on stderr) blocks the call.
+    SecretGuard,
+}
+
+#[derive(Subcommand)]
 enum SkillAction {
     /// Print the skill markdown to stdout.
     Print,
@@ -460,6 +526,13 @@ const SKILL_MD: &str = include_str!("../../../skills/memmesh/SKILL.md");
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Hooks run on EVERY tool call (e.g. Claude Code PreToolUse before every
+    // Bash command), so handle them here — before tracing / license / store
+    // setup — to keep them fast and side-effect-free.
+    if let Cmd::Hook { action } = &cli.cmd {
+        return run_hook(action);
+    }
 
     // Hold the log-file guard for the whole process so buffered log lines
     // flush on exit. Dropping it early would truncate the tail of the log.
@@ -505,6 +578,9 @@ async fn main() -> Result<()> {
 /// `main` selected. Monomorphized once per backend.
 async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()> {
     match cli.cmd {
+        // Hooks are dispatched in main() before engine setup.
+        Cmd::Hook { .. } => unreachable!("hook handled before dispatch"),
+
         Cmd::Migrate => {
             let version = store.migrate().await?;
             println!("schema version: {version}");
@@ -583,9 +659,26 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
                     use std::io::Read;
                     let mut buf = String::new();
                     std::io::stdin().read_to_string(&mut buf)?;
-                    buf
+                    // AI-tool hooks (Claude Code's UserPromptSubmit, etc.) deliver
+                    // their input as a JSON envelope on stdin, not the raw prompt —
+                    // e.g. {"hook_event_name":"UserPromptSubmit","prompt":"…"}.
+                    // Observing the wrapper JSON extracts nothing, so pull the
+                    // actual prompt out when we recognize that shape.
+                    extract_hook_prompt(&buf).unwrap_or(buf)
                 }
             };
+            // Drop harness/tool noise before it ever reaches the engine.
+            // task-notifications, system-reminders, and command wrappers are
+            // machine chatter, not things worth remembering — capturing them
+            // pollutes recall and buries the real memories.
+            if is_noise(&text) {
+                if json {
+                    println!("{}", serde_json::json!({"saved": [], "candidateCount": 0, "skipped": "noise"}));
+                } else {
+                    println!("observed: 0 saved (filtered harness noise)");
+                }
+                return Ok(());
+            }
             let role_parsed = match role.as_str() {
                 "user" => Some(memory_core::extraction::ObserveRole::User),
                 "assistant" => Some(memory_core::extraction::ObserveRole::Assistant),
@@ -648,7 +741,7 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
             };
             // Hybrid semantic + lexical + recency ranking. Falls back to the
             // lexical substring path automatically when embeddings are off.
-            let rows = memory_storage::search::search(
+            let mut rows = memory_storage::search::search(
                 store.as_ref(),
                 &filter,
                 query.as_deref(),
@@ -656,6 +749,18 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
                 offset,
             )
             .await?;
+            // For session-start injection (claude-context, typically no query)
+            // lead with the highest-value memories — facts / rules / preferences
+            // (importance ~8) before raw conversational observations (~3) — so
+            // the model sees signal first instead of recency-ordered chatter.
+            if format == "claude-context" {
+                rows.sort_by(|a, b| {
+                    b.importance
+                        .partial_cmp(&a.importance)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| b.created.cmp(&a.created))
+                });
+            }
             match format.as_str() {
                 "json" => println!("{}", serde_json::to_string_pretty(&rows)?),
                 "claude-context" => {
@@ -788,6 +893,28 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
             memory_server::serve_http(store, &http).await?;
         }
 
+        Cmd::ServeMcp { http, token } => {
+            let token = token.unwrap_or_else(|| {
+                uuid::Uuid::new_v4().to_string().replace('-', "")
+            });
+            let url = format!("http://{http}/mcp");
+            println!();
+            println!("  MemMesh remote MCP (Streamable HTTP)");
+            println!("  ────────────────────────────────────");
+            println!("  engine : {}", cli.db);
+            println!("  url    : {url}");
+            println!("  token  : {token}");
+            println!();
+            println!("  Expose it publicly with a tunnel, e.g.:");
+            println!("    cloudflared tunnel --url http://{http}");
+            println!("  then register the resulting https URL + '/mcp' as a custom");
+            println!("  connector in ChatGPT / Claude.ai, with header:");
+            println!("    Authorization: Bearer {token}");
+            println!();
+            tracing::info!(db = %cli.db, addr = %http, "starting remote MCP server");
+            memory_server::serve_mcp_http(store, license, &http, token).await?;
+        }
+
         Cmd::Sync { skip_token_check } => {
             let cfg = memory_core::config::Config::load_or_default();
             let sync_cfg = cfg.sync.clone().ok_or_else(|| {
@@ -836,6 +963,70 @@ async fn run<S: Storage>(store: Arc<S>, cli: Cli, license: License) -> Result<()
                 println!("{}", serde_json::to_string_pretty(&suite)?);
             } else {
                 suite.print_human();
+            }
+        }
+
+        Cmd::Secret { action } => {
+            use memory_storage::vault::Vault;
+            let vault = Vault::open(&Vault::default_path())
+                .await
+                .context("opening secrets vault")?;
+            match action {
+                SecretAction::Set { name, kind, desc } => {
+                    // Hidden TTY prompt for humans; fall back to reading a line
+                    // from stdin when there's no terminal (piped / automation).
+                    let value = match rpassword::prompt_password(format!("Value for '{name}' (hidden): ")) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            use std::io::BufRead;
+                            let mut line = String::new();
+                            std::io::stdin().lock().read_line(&mut line)?;
+                            line.trim_end_matches(['\n', '\r']).to_string()
+                        }
+                    };
+                    if value.is_empty() {
+                        return Err(anyhow!("empty value — nothing stored"));
+                    }
+                    vault
+                        .set(&name, &value, kind.as_deref(), desc.as_deref(), Some("user"), None)
+                        .await?;
+                    println!("stored secret '{name}' (reference it as {{{{memmesh:{name}}}}})");
+                }
+                SecretAction::List { json } => {
+                    let secrets = vault.list().await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&secrets)?);
+                    } else if secrets.is_empty() {
+                        println!("no secrets stored. Add one with `memmesh secret set <name>`.");
+                    } else {
+                        for s in &secrets {
+                            println!(
+                                "  {}{}{}",
+                                s.name,
+                                s.kind.as_deref().map(|k| format!("  [{k}]")).unwrap_or_default(),
+                                s.description.as_deref().map(|d| format!("  — {d}")).unwrap_or_default(),
+                            );
+                        }
+                    }
+                }
+                SecretAction::Rm { name } => {
+                    if vault.delete(&name).await? {
+                        println!("removed '{name}'");
+                    } else {
+                        eprintln!("no secret named '{name}'");
+                        std::process::exit(2);
+                    }
+                }
+                SecretAction::Run { command } => {
+                    let r = vault.run(&command).await?;
+                    if !r.stdout.is_empty() {
+                        print!("{}", r.stdout);
+                    }
+                    if !r.stderr.is_empty() {
+                        eprint!("{}", r.stderr);
+                    }
+                    std::process::exit(r.exit_code);
+                }
             }
         }
 
@@ -1330,6 +1521,88 @@ fn detect_git_project() -> Option<String> {
     let trimmed = path.trim();
     let last = std::path::Path::new(trimmed).file_name()?.to_str()?;
     Some(last.to_string())
+}
+
+/// Handle an AI-tool integration hook. Fast, synchronous, no engine init.
+fn run_hook(action: &HookAction) -> Result<()> {
+    match action {
+        HookAction::SecretGuard => secret_guard(),
+    }
+}
+
+/// PreToolUse secret guard. Reads the tool's hook JSON on stdin, scans the
+/// command it's about to run, and BLOCKS (exit 2) if it carries a live
+/// credential — redirecting the user/agent to the vault. This is the
+/// deterministic enforcement the advisory skill can't guarantee: a secret
+/// physically cannot reach a shell command or the transcript.
+fn secret_guard() -> Result<()> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).ok();
+
+    // Pull the command out of the hook envelope; fall back to the whole
+    // payload so we still scan if the shape is unfamiliar.
+    let scanned: String = serde_json::from_str::<serde_json::Value>(&buf)
+        .ok()
+        .and_then(|v| {
+            v.get("tool_input")
+                .and_then(|ti| ti.get("command").or_else(|| ti.get("script")))
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or(buf);
+
+    if memory_core::extraction::contains_secret(&scanned) {
+        eprintln!(
+            "⛔ memmesh secret-guard: this command appears to contain a live credential.\n\
+             Never put secrets in a command or the transcript. Store it in the vault instead:\n\
+             • run `memmesh secret set <name>`  (or open http://127.0.0.1:7878/?tab=vault&add=<name>)\n\
+             then reference it as {{{{memmesh:<name>}}}} and run via the memory_secret_run tool."
+        );
+        std::process::exit(2);
+    }
+    Ok(())
+}
+
+/// AI-tool hooks pipe a JSON envelope to stdin rather than the raw prompt.
+/// Claude Code's `UserPromptSubmit` sends
+/// `{"hook_event_name":"UserPromptSubmit","prompt":"…","session_id":…,…}`.
+/// Detect that envelope and return the inner prompt so `observe` runs on the
+/// user's text, not the wrapper. Returns `None` for plain text (observe as-is)
+/// — a bare prompt won't parse as a JSON object with these hook markers.
+fn extract_hook_prompt(raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let obj = v.as_object()?;
+    let is_hook_envelope = obj.contains_key("hook_event_name")
+        || obj.contains_key("session_id")
+        || obj.contains_key("transcript_path");
+    if !is_hook_envelope {
+        return None;
+    }
+    obj.get("prompt")
+        .and_then(|p| p.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.to_string())
+}
+
+/// True for machine/harness chatter that should never be remembered:
+/// task-notification and system-reminder blocks injected by the AI tool,
+/// command wrappers, and empty input. These arrive through the same hook
+/// path as real prompts but carry no durable user intent.
+fn is_noise(text: &str) -> bool {
+    let t = text.trim_start();
+    if t.is_empty() {
+        return true;
+    }
+    const NOISE_PREFIXES: &[&str] = &[
+        "<task-notification",
+        "<system-reminder",
+        "<local-command",
+        "<command-name",
+        "<command-message",
+        "[SYSTEM NOTIFICATION",
+    ];
+    NOISE_PREFIXES.iter().any(|p| t.starts_with(p))
 }
 
 fn detect_os_user() -> String {

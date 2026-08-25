@@ -12,11 +12,24 @@
 //!   - gRPC server lands in v1.1 alongside the sync engine.
 
 mod http;
+mod mcp_http;
 
 use anyhow::Result;
 use memory_license::License;
 use memory_storage::Storage;
 use std::sync::Arc;
+
+/// Run the remote MCP server over Streamable HTTP (for ChatGPT / Claude.ai
+/// custom connectors). Requires a bearer `token` on every request; meant to
+/// be exposed publicly via a tunnel. Binds `addr` and blocks until cancelled.
+pub async fn serve_mcp_http<S: Storage>(
+    storage: Arc<S>,
+    license: License,
+    addr: &str,
+    token: String,
+) -> Result<()> {
+    mcp_http::serve_mcp_http(storage, license, addr, token).await
+}
 
 /// Run the MCP stdio server, dispatching tool calls to the given storage
 /// backend. `license` gates every write-path tool so callers can't grow

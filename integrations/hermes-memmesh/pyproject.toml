@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memmesh-hermes"
+version = "0.1.0"
+description = "MemMesh memory provider for Hermes Agent — local-first or hosted"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["requests>=2.31"]
+
+# The supported install path for a third-party provider. Hermes' bundled
+# plugins/memory/ directory is closed to new providers, and an entry point is
+# not a second-class citizen: it still gets the dashboard config panel
+# (config_schema.py) and `hermes memmesh` subcommands (cli.py), as long as the
+# entry point names a PACKAGE rather than a single module — Hermes reads those
+# two files from disk next to __init__.py rather than importing them.
+[project.entry-points."hermes_agent.memory_providers"]
+memmesh = "memmesh_hermes:register"
+
+[tool.hatch.build.targets.wheel]
+packages = ["memmesh_hermes"]

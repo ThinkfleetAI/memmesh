@@ -33,7 +33,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Json},
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use memory_core::{
@@ -743,6 +743,78 @@ async fn get_bindings<S: Storage>(State(s): State<AppState<S>>) -> axum::respons
     }
 }
 
+// ── /vault (encrypted secrets — the console entry point) ────
+
+async fn open_vault_or_err() -> Result<memory_storage::vault::Vault, axum::response::Response> {
+    memory_storage::vault::Vault::open(&memory_storage::vault::Vault::default_path())
+        .await
+        .map_err(|e| err("vault_open", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+async fn get_vault() -> axum::response::Response {
+    let vault = match open_vault_or_err().await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match vault.list().await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => err("vault", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddSecretBody {
+    name: String,
+    value: String,
+    kind: Option<String>,
+    description: Option<String>,
+}
+
+async fn add_vault(Json(b): Json<AddSecretBody>) -> axum::response::Response {
+    if b.name.trim().is_empty() || b.value.is_empty() {
+        return err("bad_request", StatusCode::BAD_REQUEST, "name and value are required");
+    }
+    let vault = match open_vault_or_err().await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match vault
+        .set(b.name.trim(), &b.value, b.kind.as_deref(), b.description.as_deref(), Some("user"), None)
+        .await
+    {
+        Ok(()) => Json(json!({ "ok": true, "name": b.name.trim() })).into_response(),
+        Err(e) => err("vault_write", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// Reveal a secret's plaintext to the **human** at the loopback console (for
+/// copy/paste of their own credential). Deliberately NOT exposed to the AI —
+/// there is no MCP equivalent; the model only ever gets scrubbed `secret_run`
+/// output.
+async fn reveal_vault(Path(name): Path<String>) -> axum::response::Response {
+    let vault = match open_vault_or_err().await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match vault.reveal(&name).await {
+        Ok(Some(value)) => Json(json!({ "name": name, "value": value })).into_response(),
+        Ok(None) => err("not_found", StatusCode::NOT_FOUND, name),
+        Err(e) => err("vault_reveal", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+async fn delete_vault(Path(name): Path<String>) -> axum::response::Response {
+    let vault = match open_vault_or_err().await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match vault.delete(&name).await {
+        Ok(true) => Json(json!({ "ok": true })).into_response(),
+        Ok(false) => err("not_found", StatusCode::NOT_FOUND, name),
+        Err(e) => err("vault_delete", StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 // ── Public entrypoint ───────────────────────────────────────
 
 /// Build the HTTP router. Caller owns binding + serving so the same router
@@ -767,6 +839,9 @@ pub fn router<S: Storage>(storage: Arc<S>) -> Router {
         .route("/sync", get(get_sync))
         .route("/sync/run", post(run_sync))
         .route("/bindings", get(get_bindings))
+        .route("/vault", get(get_vault).post(add_vault))
+        .route("/vault/:name", delete(delete_vault))
+        .route("/vault/:name/reveal", get(reveal_vault))
         .route("/database", get(get_database).put(put_database))
         .route("/database/test", post(test_database))
         .route("/database/copy", post(copy_database))

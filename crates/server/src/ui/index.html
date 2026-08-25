@@ -102,6 +102,26 @@
   .covbar { background: var(--panel-2); border-radius: 6px; height: 14px; overflow: hidden; }
   .covbar span { display: block; height: 100%; background: var(--ok); }
   .cov #covText { margin-top: 6px; }
+  .reveal-box { margin-top: 8px; }
+  .secret-val { font-family: var(--mono); font-size: 12px; background: var(--panel-2); border: 1px dashed var(--warn); color: var(--fg); padding: 5px 9px; border-radius: 6px; word-break: break-all; user-select: all; display: inline-block; }
+  /* Focused credential-request card (the AI-prompt landing) */
+  .reqcard { background: var(--panel); border: 1px solid var(--accent); border-radius: 14px; padding: 22px 24px; margin-bottom: 20px; max-width: 560px; box-shadow: 0 8px 30px color-mix(in srgb, var(--accent) 14%, transparent); }
+  .reqhead { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 18px; }
+  .reqicon { font-size: 26px; line-height: 1; }
+  .reqtitle { font-size: 17px; font-weight: 700; }
+  .reqsub { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+  .fieldlabel { display: block; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin: 12px 0 5px; }
+  .fieldlabel input { display: block; width: 100%; margin-top: 5px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .reqname { font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
+  .reqkind { font-family: system-ui, sans-serif; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-left: 6px; }
+  .valrow { display: flex; gap: 8px; align-items: stretch; }
+  .valrow input { flex: 1; font-family: var(--mono); }
+  .iconbtn { flex: none; min-width: 52px; }
+  .reqactions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+  .reqcard.saved { border-color: var(--ok); box-shadow: 0 8px 30px color-mix(in srgb, var(--ok) 16%, transparent); }
+  details.addsecret { padding: 14px 16px; }
+  details.addsecret summary { cursor: pointer; font-weight: 600; color: var(--fg); font-size: 13px; }
+  .formgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 10px; }
   .pg { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
   .pgcol .item { padding: 9px 11px; }
   @media (max-width: 720px) { .pg { grid-template-columns: 1fr; } }
@@ -119,6 +139,8 @@
   <button data-tab="memories">Memories</button>
   <button data-tab="graph">Graph</button>
   <button data-tab="context">Context</button>
+  <button data-tab="ideas">Ideas</button>
+  <button data-tab="vault">Vault</button>
   <button data-tab="duplicates">Duplicates</button>
   <button data-tab="playground">Playground</button>
   <button data-tab="sync">Sync</button>
@@ -191,6 +213,58 @@
     <div class="hint">Exactly the memory block that gets injected into an AI tool's context for this query — the same <code>claude-context</code> format the SessionStart hook uses. This is “what the AI actually sees.”</div>
     <div class="row"><span class="muted" id="ctxMeta"></span><span class="spacer"></span><button class="btn" id="ctxCopy">Copy</button></div>
     <pre class="logs" id="ctxBlock" style="max-height:58vh"></pre>
+  </section>
+
+  <!-- IDEAS -->
+  <section id="tab-ideas" class="hidden">
+    <div class="row">
+      <input id="ideaInput" type="text" placeholder="Capture an idea…" />
+      <button class="btn primary" id="ideaAdd">Add idea</button>
+      <button class="btn" id="ideaRefresh">Refresh</button>
+    </div>
+    <div class="hint">Ideas are captured automatically from your conversations (“we should…”, “what if we…”, “might want to…”) and tracked here, separate from facts. Archive one when it's done or acted on.</div>
+    <div class="list" id="ideaList"></div>
+  </section>
+
+  <!-- VAULT -->
+  <section id="tab-vault" class="hidden">
+    <!-- Focused credential request — shown when an AI tool sends the user here
+         via ?add=NAME. The one-field "just enter this" experience. -->
+    <div id="vReqPanel" class="reqcard hidden">
+      <div class="reqhead">
+        <span class="reqicon">🔒</span>
+        <div>
+          <div class="reqtitle">An AI tool needs a credential</div>
+          <div class="reqsub" id="vReqSub">Enter it below. It's encrypted with your OS keychain — the assistant can use it but never sees the value.</div>
+        </div>
+      </div>
+      <label class="fieldlabel">Secret name</label>
+      <div class="reqname"><span id="vReqName">—</span> <span class="reqkind" id="vReqKind"></span></div>
+      <div id="vReqFields"></div>
+      <div class="reqactions">
+        <button class="btn primary" id="vReqSave">Save to vault</button>
+        <button class="btn" id="vReqCancel">Cancel</button>
+        <span class="muted" id="vReqMsg"></span>
+      </div>
+    </div>
+
+    <details class="card addsecret" id="vAddCard">
+      <summary>+ Add a secret manually</summary>
+      <div class="hint" style="margin:8px 0">Values are encrypted with your OS-keychain key and stored locally. The AI references a secret by name and can run commands with it, but <b>never sees the value</b>.</div>
+      <div class="formgrid">
+        <label class="fieldlabel">Name<input id="vName" type="text" placeholder="aws-prod" /></label>
+        <label class="fieldlabel">Kind<input id="vKind" type="text" placeholder="aws, db, token…" /></label>
+        <label class="fieldlabel" style="grid-column:1/-1">Description<input id="vDesc" type="text" placeholder="what this credential is for (optional)" /></label>
+        <label class="fieldlabel" style="grid-column:1/-1">Value
+          <div class="valrow"><input id="vValue" type="password" placeholder="secret value" autocomplete="off" />
+            <button class="btn iconbtn" id="vValToggle" type="button" title="show / hide">show</button></div>
+        </label>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="vAdd">Save secret</button></div>
+    </details>
+
+    <div class="row"><span class="muted">Stored secrets — reference in commands as <code>{{memmesh:name}}</code></span><span class="spacer"></span><button class="btn" id="vRefresh">Refresh</button></div>
+    <div class="list" id="vaultList"></div>
   </section>
 
   <!-- DUPLICATES -->
@@ -308,11 +382,13 @@ function esc(s) { return (s ?? '').toString().replace(/[&<>]/g, c => ({'&':'&amp
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
   b.classList.add('active');
-  ['status','memories','graph','context','duplicates','playground','sync','logs','config'].forEach(t =>
+  ['status','memories','graph','context','ideas','vault','duplicates','playground','sync','logs','config'].forEach(t =>
     $('#tab-' + t).classList.toggle('hidden', t !== b.dataset.tab));
   if (b.dataset.tab === 'memories') loadMemories();
   if (b.dataset.tab === 'graph') loadGraph();
   if (b.dataset.tab === 'context') runContext();
+  if (b.dataset.tab === 'ideas') loadIdeas();
+  if (b.dataset.tab === 'vault') loadVault();
   if (b.dataset.tab === 'duplicates') { /* on demand */ }
   if (b.dataset.tab === 'sync') loadSync();
   if (b.dataset.tab === 'logs') loadLogs();
@@ -744,6 +820,208 @@ async function runContext() {
 $('#ctxRun').onclick = runContext;
 $('#ctxQuery').addEventListener('keydown', e => { if (e.key === 'Enter') runContext(); });
 $('#ctxCopy').onclick = () => { navigator.clipboard.writeText($('#ctxBlock').textContent); toast('Copied', 'ok'); };
+
+// ---- ideas ----
+async function loadIdeas() {
+  try {
+    const rows = await api('/memory?type=idea&limit=100');
+    if (!rows.length) {
+      $('#ideaList').innerHTML = '<div class="empty">No ideas yet — they appear as you brainstorm ("we should…", "what if we…"), or add one above.</div>';
+      return;
+    }
+    $('#ideaList').innerHTML = rows.map(m => `
+      <div class="item" data-id="${esc(m.id)}">
+        <div class="meta"><span class="tag scope">idea</span>
+          ${m.projectId ? `<span class="tag">${esc(m.projectId)}</span>` : ''}
+          <span class="id">${esc((m.created || '').slice(0, 10))}</span></div>
+        <div class="content">${esc(m.content)}</div>
+        <div class="actions"><button class="btn" data-act="done">✓ Done / archive</button></div>
+      </div>`).join('');
+  } catch (e) { toast('Ideas load failed: ' + e.message, 'err'); }
+}
+$('#ideaList').onclick = async (ev) => {
+  const btn = ev.target.closest('button[data-act=done]'); if (!btn) return;
+  const id = ev.target.closest('.item').dataset.id;
+  try {
+    await api('/memory/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast('Archived', 'ok'); ev.target.closest('.item').remove(); poll();
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+};
+$('#ideaAdd').onclick = async () => {
+  const v = $('#ideaInput').value.trim(); if (!v) return;
+  try {
+    await api('/observe', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'idea: ' + v }) });
+    $('#ideaInput').value = ''; toast('Idea captured', 'ok'); loadIdeas(); poll();
+  } catch (e) { toast('Failed: ' + e.message, 'err'); }
+};
+$('#ideaRefresh').onclick = loadIdeas;
+$('#ideaInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ideaAdd').onclick(); });
+
+// ---- vault: focused credential request (AI-prompt landing) ----
+let reqPanelName = null;
+let reqPanelKind = 'custom';
+// Field specs per credential kind → the "proper screen" for each. A single
+// field named "value" is stored as a plain string; multiple fields are stored
+// as JSON and referenced as {{memmesh:name|field}}.
+const SECRET_KINDS = {
+  api_key:           { label: 'API key',          fields: [{ k: 'value', label: 'API key', secret: true }] },
+  token:             { label: 'Token',            fields: [{ k: 'value', label: 'Token', secret: true }] },
+  password:          { label: 'Password',         fields: [{ k: 'value', label: 'Password', secret: true }] },
+  basic_auth:        { label: 'Username & password', fields: [{ k: 'username', label: 'Username' }, { k: 'password', label: 'Password', secret: true }] },
+  oauth2:            { label: 'OAuth2 client',    fields: [{ k: 'clientId', label: 'Client ID' }, { k: 'clientSecret', label: 'Client secret', secret: true }] },
+  connection_string: { label: 'Connection URL',   fields: [{ k: 'value', label: 'Connection URL', secret: true, ph: 'postgres://user:pass@host:5432/db' }] },
+  ssh_key:           { label: 'SSH private key',  fields: [{ k: 'value', label: 'Private key', secret: true, area: true, ph: '-----BEGIN OPENSSH PRIVATE KEY-----' }] },
+  custom:            { label: 'Secret',           fields: [{ k: 'value', label: 'Value', secret: true }] },
+};
+function renderReqFields(kind) {
+  const spec = SECRET_KINDS[kind] || SECRET_KINDS.custom;
+  $('#vReqKind').textContent = spec.label;
+  $('#vReqFields').innerHTML = spec.fields.map(f => `
+    <label class="fieldlabel">${esc(f.label)}
+      <div class="valrow">
+        ${f.area
+          ? `<textarea class="reqfield" data-k="${f.k}" rows="4" spellcheck="false" placeholder="${esc(f.ph || '')}"></textarea>`
+          : `<input class="reqfield" data-k="${f.k}" type="${f.secret ? 'password' : 'text'}" autocomplete="off" spellcheck="false" placeholder="${esc(f.ph || '')}" />`}
+        ${f.secret && !f.area ? `<button class="btn iconbtn reqtoggle" type="button">show</button>` : ''}
+      </div>
+    </label>`).join('');
+}
+// delegated show/hide for any password field in the panel
+$('#vReqFields').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.reqtoggle'); if (!btn) return;
+  const input = btn.parentElement.querySelector('.reqfield');
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'hide' : 'show';
+});
+function bindToggle(btnSel, inputSel) {
+  $(btnSel).onclick = () => {
+    const i = $(inputSel);
+    const show = i.type === 'password';
+    i.type = show ? 'text' : 'password';
+    $(btnSel).textContent = show ? 'hide' : 'show';
+  };
+}
+bindToggle('#vValToggle', '#vValue');
+$('#vReqSave').onclick = async () => {
+  const fields = [...$('#vReqFields').querySelectorAll('.reqfield')];
+  const entries = fields.map(f => [f.dataset.k, f.value]);
+  if (entries.some(([, v]) => !v)) { toast('Fill in every field', 'err'); return; }
+  // single "value" → plain string; multiple → JSON record.
+  const value = (entries.length === 1 && entries[0][0] === 'value')
+    ? entries[0][1]
+    : JSON.stringify(Object.fromEntries(entries));
+  try {
+    await api('/vault', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: reqPanelName, value, kind: reqPanelKind }) });
+    const panel = $('#vReqPanel');
+    panel.classList.add('saved');
+    const refHint = entries.length > 1
+      ? `Reference a field as <code>{{memmesh:${esc(reqPanelName)}|${esc(entries[0][0])}}}</code>.`
+      : '';
+    panel.innerHTML = `<div class="reqhead"><span class="reqicon">✅</span><div>
+      <div class="reqtitle">Saved — the assistant can use it now</div>
+      <div class="reqsub"><code>${esc(reqPanelName)}</code> is encrypted in your vault. ${refHint} You can return to your AI tool.</div></div></div>`;
+    loadVault();
+  } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+};
+$('#vReqCancel').onclick = () => $('#vReqPanel').classList.add('hidden');
+
+// ---- vault ----
+async function loadVault() {
+  try {
+    const rows = await api('/vault');
+    if (!rows.length) {
+      $('#vaultList').innerHTML = '<div class="empty">No secrets yet. Add credentials above — the AI can use them without ever seeing the value.</div>';
+      return;
+    }
+    $('#vaultList').innerHTML = rows.map(s => `
+      <div class="item" data-name="${esc(s.name)}">
+        <div class="meta"><span class="tag scope">${esc(s.name)}</span>
+          ${s.kind ? `<span class="tag">${esc(s.kind)}</span>` : ''}
+          ${s.last_used ? `<span class="id">used ${esc(s.last_used.slice(0,10))}</span>` : '<span class="id">never used</span>'}</div>
+        ${s.description ? `<div class="content">${esc(s.description)}</div>` : ''}
+        <div class="prov"><span>reference: {{memmesh:${esc(s.name)}}}</span></div>
+        <div class="reveal-box hidden"></div>
+        <div class="actions">
+          <button class="btn" data-act="reveal">Reveal</button>
+          <button class="btn" data-act="copy">Copy</button>
+          <button class="btn danger" data-act="del">Delete</button>
+        </div>
+      </div>`).join('');
+  } catch (e) { toast('Vault load failed: ' + e.message, 'err'); }
+}
+$('#vAdd').onclick = async () => {
+  const name = $('#vName').value.trim(), value = $('#vValue').value;
+  if (!name || !value) { toast('Name and value required', 'err'); return; }
+  try {
+    await api('/vault', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, value, kind: $('#vKind').value.trim() || null, description: $('#vDesc').value.trim() || null }) });
+    $('#vName').value = $('#vKind').value = $('#vDesc').value = $('#vValue').value = '';
+    toast('Secret saved (encrypted)', 'ok'); loadVault();
+  } catch (e) { toast('Save failed: ' + e.message, 'err'); }
+};
+$('#vRefresh').onclick = loadVault;
+$('#vaultList').onclick = async (ev) => {
+  const btn = ev.target.closest('button[data-act]'); if (!btn) return;
+  const item = ev.target.closest('.item'); const name = item.dataset.name;
+  const act = btn.dataset.act;
+  if (act === 'del') {
+    if (!confirm(`Delete secret '${name}'?`)) return;
+    try { await api('/vault/' + encodeURIComponent(name), { method: 'DELETE' });
+      toast('Deleted', 'ok'); item.remove(); }
+    catch (e) { toast('Delete failed: ' + e.message, 'err'); }
+  } else if (act === 'reveal') {
+    const box = item.querySelector('.reveal-box');
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); btn.textContent = 'Reveal'; return; }
+    try {
+      const r = await api('/vault/' + encodeURIComponent(name) + '/reveal');
+      box.innerHTML = `<code class="secret-val">${esc(r.value)}</code>`;
+      box.classList.remove('hidden'); btn.textContent = 'Hide';
+    } catch (e) { toast('Reveal failed: ' + e.message, 'err'); }
+  } else if (act === 'copy') {
+    try {
+      const r = await api('/vault/' + encodeURIComponent(name) + '/reveal');
+      await navigator.clipboard.writeText(r.value); toast('Copied to clipboard', 'ok');
+    } catch (e) { toast('Copy failed: ' + e.message, 'err'); }
+  }
+};
+
+// ---- deep link: ?tab=vault&add=NAME&kind=K  (the AI credential prompt lands here) ----
+(function () {
+  const q = new URLSearchParams(location.search);
+  const tab = q.get('tab');
+  if (tab) {
+    const b = [...document.querySelectorAll('nav button')].find(x => x.dataset.tab === tab);
+    if (b) b.click();
+  }
+  const addName = q.get('add');
+  if (addName) {
+    reqPanelName = addName;
+    reqPanelKind = q.get('kind') || inferKind(addName);
+    $('#vReqName').textContent = addName;
+    const purpose = q.get('purpose');
+    $('#vReqSub').innerHTML = purpose
+      ? `Requested for: <b>${esc(purpose)}</b>. It's encrypted with your OS keychain — the assistant can use it but never sees the value.`
+      : `Enter it below. It's encrypted with your OS keychain — the assistant can use it but never sees the value.`;
+    renderReqFields(reqPanelKind);
+    $('#vReqPanel').classList.remove('hidden');
+    setTimeout(() => { const f = $('#vReqFields').querySelector('.reqfield'); if (f) f.focus(); }, 200);
+  }
+})();
+// Best-effort kind inference from the name when the AI didn't declare one.
+function inferKind(name) {
+  const n = name.toLowerCase();
+  if (/(user.*pass|basic.?auth|login)/.test(n)) return 'basic_auth';
+  if (/(oauth|client.?secret|client.?id)/.test(n)) return 'oauth2';
+  if (/(^|[_-])(db|database|postgres|mysql|mongo|redis|conn|dsn)/.test(n) || /url$/.test(n)) return 'connection_string';
+  if (/(ssh|private.?key|pem)/.test(n)) return 'ssh_key';
+  if (/pass(word|wd)?$/.test(n)) return 'password';
+  if (/token$/.test(n)) return 'token';
+  if (/(api.?key|apikey|key$)/.test(n)) return 'api_key';
+  return 'custom';
+}
 
 // ---- boot ----
 poll();

@@ -305,36 +305,67 @@ fn install_claude_code_hook(settings_path: &Path, binary: &Path) -> Result<()> {
         bail!("{}::hooks is not an object", settings_path.display());
     }
     let hooks_obj = hooks.as_object_mut().unwrap();
+    let bin = binary.to_string_lossy();
 
-    // Our hook entry — matcher "*" catches every prompt. Command runs
-    // synchronously (Claude Code waits for it), reads the prompt from
-    // stdin, and is heuristic-only so finishes in <50ms even on a cold
-    // start. We pipe stderr to /dev/null to keep Claude Code's output
-    // clean if extraction fails.
-    let our_hook = serde_json::json!({
+    // 1. CAPTURE — UserPromptSubmit: pipe every prompt into the engine.
+    //    matcher "*" catches every prompt; runs synchronously (Claude Code
+    //    waits), heuristic-only so it finishes in <50ms even cold. stderr is
+    //    dropped so a failure never dirties Claude Code's output.
+    let observe_hook = serde_json::json!({
         "matcher": "*",
-        "hooks": [
-            {
-                "type": "command",
-                "command": format!(
-                    "{} observe --role user --json 2>/dev/null || true",
-                    binary.to_string_lossy(),
-                )
-            }
-        ]
+        "hooks": [ {
+            "type": "command",
+            "command": format!("{bin} observe --role user --json 2>/dev/null || true"),
+        } ]
     });
+    upsert_owned_hook(hooks_obj, "UserPromptSubmit", observe_hook, "memmesh observe")?;
 
-    // Append-or-replace logic: if there's already a hooks block we own
-    // (matcher "*" with a command containing "memmesh observe"),
-    // replace it; otherwise append to the array so other hooks survive.
-    let event = hooks_obj
-        .entry("UserPromptSubmit".to_string())
+    // 2. RECALL — SessionStart: inject relevant memories into context at the
+    //    start of each session. The hook's stdout is added to the session
+    //    context, so `search --format claude-context` surfaces the memory
+    //    block automatically (no dependency on the model choosing to search).
+    let recall_hook = serde_json::json!({
+        "hooks": [ {
+            "type": "command",
+            "command": format!("{bin} search --format claude-context --limit 30 2>/dev/null || true"),
+        } ]
+    });
+    upsert_owned_hook(hooks_obj, "SessionStart", recall_hook, "memmesh search")?;
+
+    // 3. ENFORCE — PreToolUse secret-guard on Bash: block a command that
+    //    carries a live credential and redirect it to the vault. Deterministic
+    //    enforcement the advisory skill can't guarantee — secrets can't reach a
+    //    shell command or the transcript. Fast (regex only, no engine init).
+    let guard_hook = serde_json::json!({
+        "matcher": "Bash",
+        "hooks": [ {
+            "type": "command",
+            "command": format!("{bin} hook secret-guard"),
+        } ]
+    });
+    upsert_owned_hook(hooks_obj, "PreToolUse", guard_hook, "hook secret-guard")?;
+
+    let serialized = serde_json::to_string_pretty(&doc)?;
+    std::fs::write(settings_path, serialized)?;
+    Ok(())
+}
+
+/// Append-or-replace a hook we own under `event`, identified by `marker`
+/// appearing in one of its command strings. Other vendors' hooks are left
+/// untouched, and re-running install replaces our entry rather than
+/// duplicating it.
+fn upsert_owned_hook(
+    hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
+    event: &str,
+    our_hook: serde_json::Value,
+    marker: &str,
+) -> Result<()> {
+    let ev = hooks_obj
+        .entry(event.to_string())
         .or_insert_with(|| serde_json::json!([]));
-    let arr = event
+    let arr = ev
         .as_array_mut()
-        .ok_or_else(|| anyhow!("hooks.UserPromptSubmit is not an array"))?;
-
-    let mut replaced = false;
+        .ok_or_else(|| anyhow!("hooks.{event} is not an array"))?;
     for entry in arr.iter_mut() {
         let is_ours = entry
             .get("hooks")
@@ -343,22 +374,16 @@ fn install_claude_code_hook(settings_path: &Path, binary: &Path) -> Result<()> {
                 hs.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
-                        .is_some_and(|s| s.contains("memmesh observe"))
+                        .is_some_and(|s| s.contains(marker))
                 })
             })
             .unwrap_or(false);
         if is_ours {
-            *entry = our_hook.clone();
-            replaced = true;
-            break;
+            *entry = our_hook;
+            return Ok(());
         }
     }
-    if !replaced {
-        arr.push(our_hook);
-    }
-
-    let serialized = serde_json::to_string_pretty(&doc)?;
-    std::fs::write(settings_path, serialized)?;
+    arr.push(our_hook);
     Ok(())
 }
 
